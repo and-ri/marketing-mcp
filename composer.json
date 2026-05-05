@@ -1,0 +1,10 @@
+{
+    "require": {
+        "vlucas/phpdotenv": "^5.6",
+        "googleads/google-ads-php": "^33.3",
+        "facebook/php-business-sdk": "^25.0",
+        "google/analytics-data": "^0.23.3",
+        "react/http": "^1.10",
+        "react/socket": "^1.16"
+    }
+}
