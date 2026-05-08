@@ -12,7 +12,13 @@ use Google\Auth\Credentials\UserRefreshCredentials;
 
 class GoogleAnalyticsProvider
 {
+    private array $config;
     private ?BetaAnalyticsDataClient $client = null;
+
+    public function __construct(array $config = [])
+    {
+        $this->config = $config ?: $_ENV;
+    }
 
     private function client(): BetaAnalyticsDataClient
     {
@@ -23,9 +29,9 @@ class GoogleAnalyticsProvider
         $credentials = new UserRefreshCredentials(
             'https://www.googleapis.com/auth/analytics.readonly',
             [
-                'client_id'     => $_ENV['GOOGLE_CLIENT_ID'],
-                'client_secret' => $_ENV['GOOGLE_CLIENT_SECRET'],
-                'refresh_token' => $_ENV['GOOGLE_REFRESH_TOKEN'],
+                'client_id'     => $this->config['GOOGLE_CLIENT_ID'],
+                'client_secret' => $this->config['GOOGLE_CLIENT_SECRET'],
+                'refresh_token' => $this->config['GOOGLE_REFRESH_TOKEN'],
             ]
         );
 

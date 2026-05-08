@@ -7,7 +7,13 @@ use Google\Ads\GoogleAds\V24\Services\SearchGoogleAdsStreamRequest;
 
 class GoogleAdsProvider
 {
+    private array $config;
     private mixed $client = null;
+
+    public function __construct(array $config = [])
+    {
+        $this->config = $config ?: $_ENV;
+    }
 
     private function client(): mixed
     {
@@ -16,17 +22,17 @@ class GoogleAdsProvider
         }
 
         $oAuth2Credential = (new OAuth2TokenBuilder())
-            ->withClientId($_ENV['GOOGLE_ADS_CLIENT_ID'])
-            ->withClientSecret($_ENV['GOOGLE_ADS_CLIENT_SECRET'])
-            ->withRefreshToken($_ENV['GOOGLE_ADS_REFRESH_TOKEN'])
+            ->withClientId($this->config['GOOGLE_ADS_CLIENT_ID'])
+            ->withClientSecret($this->config['GOOGLE_ADS_CLIENT_SECRET'])
+            ->withRefreshToken($this->config['GOOGLE_ADS_REFRESH_TOKEN'])
             ->build();
 
         $builder = (new GoogleAdsClientBuilder())
-            ->withDeveloperToken($_ENV['GOOGLE_ADS_DEVELOPER_TOKEN'])
+            ->withDeveloperToken($this->config['GOOGLE_ADS_DEVELOPER_TOKEN'])
             ->withOAuth2Credential($oAuth2Credential);
 
-        if (!empty($_ENV['GOOGLE_ADS_LOGIN_CUSTOMER_ID'])) {
-            $builder = $builder->withLoginCustomerId((int) $_ENV['GOOGLE_ADS_LOGIN_CUSTOMER_ID']);
+        if (!empty($this->config['GOOGLE_ADS_LOGIN_CUSTOMER_ID'])) {
+            $builder = $builder->withLoginCustomerId((int) $this->config['GOOGLE_ADS_LOGIN_CUSTOMER_ID']);
         }
 
         $this->client = $builder->build();

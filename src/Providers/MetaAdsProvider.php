@@ -8,7 +8,13 @@ use FacebookAds\Object\Ad;
 
 class MetaAdsProvider
 {
+    private array $config;
     private bool $initialized = false;
+
+    public function __construct(array $config = [])
+    {
+        $this->config = $config ?: $_ENV;
+    }
 
     private function init(): void
     {
@@ -16,9 +22,9 @@ class MetaAdsProvider
             return;
         }
         Api::init(
-            $_ENV['META_APP_ID'],
-            $_ENV['META_APP_SECRET'],
-            $_ENV['META_ACCESS_TOKEN']
+            $this->config['META_APP_ID'],
+            $this->config['META_APP_SECRET'],
+            $this->config['META_ACCESS_TOKEN']
         );
         $this->initialized = true;
     }
