@@ -35,36 +35,21 @@ MCP client config (`claude_desktop_config.json` or `.claude/settings.json`):
 ## Server setup (HTTP, multi-user, Docker)
 
 Run the server once and connect from any device with a Bearer token.
+SSL is handled by Nginx Proxy Manager (or any other reverse proxy).
 
-### 1 — Prerequisites
-
-- A Linux server (VPS/cloud) with Docker + Docker Compose installed
-- A domain pointing to your server's IP (e.g. `mcp.example.com`)
-
-### 2 — Clone and get certificates
+### 1 — Start the container
 
 ```bash
 git clone https://github.com/you/marketing-mcp.git
 cd marketing-mcp
-
-# Replace YOUR_DOMAIN and YOUR_EMAIL throughout
-export DOMAIN=mcp.example.com
-export EMAIL=you@example.com
-
-# Temporarily start nginx on port 80 to pass the ACME challenge
-sed -i "s/YOUR_DOMAIN/$DOMAIN/g" nginx/mcp.conf
-docker compose up -d nginx
-
-# Issue the certificate (one-time)
-docker compose run --rm certbot certonly \
-  --webroot -w /var/www/certbot \
-  -d $DOMAIN --email $EMAIL --agree-tos --no-eff-email
-
-# Start everything
 docker compose up -d
 ```
 
-### 3 — Create users
+The MCP server listens on port **8080**. Point your reverse proxy at `http://<host>:8080`.
+
+In **Nginx Proxy Manager**: add a Proxy Host → forward to `localhost:8080` → enable SSL as usual.
+
+### 2 — Create users
 
 Run `users.php` inside the container to manage users and their API credentials.
 
@@ -99,7 +84,7 @@ Credentials stored per user (same keys as `.env.example`):
 | Google Analytics 4 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` |
 | Meta Ads | `META_APP_ID`, `META_APP_SECRET`, `META_ACCESS_TOKEN` |
 
-### 4 — Connect from Claude Code
+### 3 — Connect from Claude Code
 
 Add to `~/.claude.json` (global) or `.mcp.json` (project):
 
@@ -119,7 +104,7 @@ Add to `~/.claude.json` (global) or `.mcp.json` (project):
 
 Each user gets their own token and their own set of API credentials. The server is stateless — every request authenticates via the Bearer token and loads the user's credentials from SQLite before executing the tool.
 
-### 5 — Maintenance
+### 4 — Maintenance
 
 ```bash
 # View logs
@@ -127,11 +112,6 @@ docker compose logs -f mcp
 
 # Restart after code changes
 docker compose up -d --build mcp
-
-# Certificate renewal runs automatically via the certbot container.
-# Force a manual renewal:
-docker compose exec certbot certbot renew
-docker compose exec nginx nginx -s reload
 ```
 
 ---

@@ -1,50 +1,18 @@
 services:
-
-  # ── Marketing MCP application ───────────────────────────────────────────────
   mcp:
     build: .
     restart: unless-stopped
+    ports:
+      - "8080:8080"              # Nginx Proxy Manager points here
     volumes:
-      - mcp_data:/app/data     # SQLite database persists here
+      - mcp_data:/app/data       # SQLite database persists here
     environment:
       MCP_PORT: "8080"
-    expose:
-      - "8080"
     healthcheck:
       test: ["CMD", "php", "-r", "exit(file_get_contents('http://localhost:8080/health') === 'OK' ? 0 : 1);"]
       interval: 30s
       timeout: 5s
       retries: 3
 
-  # ── Nginx reverse proxy with TLS ────────────────────────────────────────────
-  nginx:
-    image: nginx:alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx:/etc/nginx/conf.d:ro
-      - certbot_www:/var/www/certbot:ro
-      - certbot_conf:/etc/letsencrypt:ro
-    depends_on:
-      - mcp
-
-  # ── Certbot for automatic Let's Encrypt certificate renewal ─────────────────
-  certbot:
-    image: certbot/certbot
-    restart: unless-stopped
-    volumes:
-      - certbot_www:/var/www/certbot
-      - certbot_conf:/etc/letsencrypt
-    entrypoint: >
-      /bin/sh -c "trap exit TERM;
-        while :; do
-          certbot renew --webroot -w /var/www/certbot --quiet;
-          sleep 12h & wait $${!};
-        done"
-
 volumes:
   mcp_data:
-  certbot_www:
-  certbot_conf:
