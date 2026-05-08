@@ -1,9 +1,11 @@
 # marketing-mcp
 
 MCP server that exposes Google Ads, Google Analytics 4, and Meta Ads data as tools.
-Built in PHP. Transport: stdio, protocol: MCP 2024-11-05.
+Built in PHP. Two transports supported: **stdio** (local) and **HTTP** (remote/multi-user).
 
-## Setup
+---
+
+## Local setup (stdio, single user)
 
 ```bash
 # 1. Install dependencies
@@ -28,7 +30,113 @@ MCP client config (`claude_desktop_config.json` or `.claude/settings.json`):
 }
 ```
 
-## Credentials
+---
+
+## Server setup (HTTP, multi-user, Docker)
+
+Run the server once and connect from any device with a Bearer token.
+
+### 1 — Prerequisites
+
+- A Linux server (VPS/cloud) with Docker + Docker Compose installed
+- A domain pointing to your server's IP (e.g. `mcp.example.com`)
+
+### 2 — Clone and get certificates
+
+```bash
+git clone https://github.com/you/marketing-mcp.git
+cd marketing-mcp
+
+# Replace YOUR_DOMAIN and YOUR_EMAIL throughout
+export DOMAIN=mcp.example.com
+export EMAIL=you@example.com
+
+# Temporarily start nginx on port 80 to pass the ACME challenge
+sed -i "s/YOUR_DOMAIN/$DOMAIN/g" nginx/mcp.conf
+docker compose up -d nginx
+
+# Issue the certificate (one-time)
+docker compose run --rm certbot certonly \
+  --webroot -w /var/www/certbot \
+  -d $DOMAIN --email $EMAIL --agree-tos --no-eff-email
+
+# Start everything
+docker compose up -d
+```
+
+### 3 — Create users
+
+Run `users.php` inside the container to manage users and their API credentials.
+
+```bash
+# Create a user — prints a Bearer token
+docker compose exec mcp php users.php add alice
+
+# Import credentials from a .env file
+docker compose exec -T mcp php users.php env:import alice < alice.env
+
+# Or set individual values
+docker compose exec mcp php users.php env:set alice META_ACCESS_TOKEN EAAxxxxx
+
+# List all users
+docker compose exec mcp php users.php list
+
+# Show env vars for a user (values are masked)
+docker compose exec mcp php users.php env:show alice
+
+# Regenerate a compromised token
+docker compose exec mcp php users.php token:reset alice
+
+# Remove a user
+docker compose exec mcp php users.php remove alice
+```
+
+Credentials stored per user (same keys as `.env.example`):
+
+| Platform | Keys |
+|---|---|
+| Google Ads | `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (MCC only) |
+| Google Analytics 4 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` |
+| Meta Ads | `META_APP_ID`, `META_APP_SECRET`, `META_ACCESS_TOKEN` |
+
+### 4 — Connect from Claude Code
+
+Add to `~/.claude.json` (global) or `.mcp.json` (project):
+
+```json
+{
+  "mcpServers": {
+    "marketing": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <token printed by users.php add>"
+      }
+    }
+  }
+}
+```
+
+Each user gets their own token and their own set of API credentials. The server is stateless — every request authenticates via the Bearer token and loads the user's credentials from SQLite before executing the tool.
+
+### 5 — Maintenance
+
+```bash
+# View logs
+docker compose logs -f mcp
+
+# Restart after code changes
+docker compose up -d --build mcp
+
+# Certificate renewal runs automatically via the certbot container.
+# Force a manual renewal:
+docker compose exec certbot certbot renew
+docker compose exec nginx nginx -s reload
+```
+
+---
+
+## Credentials (local setup)
 
 `php auth.php` writes to `.env` automatically. You can also fill it manually — copy `.env.example` to `.env`.
 

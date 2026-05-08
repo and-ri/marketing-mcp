@@ -52,6 +52,11 @@ class McpServer
         }
     }
 
+    public function processRequest(array $request): array
+    {
+        return $this->dispatch($request);
+    }
+
     private function dispatch(array $request): array
     {
         $id = $request['id'];
