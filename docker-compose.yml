@@ -1,6 +1,8 @@
 services:
   mcp:
-    build: ${MCP_BUILD_CONTEXT:-.}
+    image: ghcr.io/and-ri/marketing-mcp:latest
+    # To build locally instead: comment the line above and uncomment below
+    # build: .
     restart: unless-stopped
     ports:
       - "8080:8080"
