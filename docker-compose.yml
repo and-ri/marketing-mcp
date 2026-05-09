@@ -1,11 +1,11 @@
 services:
   mcp:
-    build: .
+    build: ${MCP_BUILD_CONTEXT:-.}
     restart: unless-stopped
     ports:
-      - "8080:8080"              # Nginx Proxy Manager points here
+      - "8080:8080"
     volumes:
-      - mcp_data:/app/data       # SQLite database persists here
+      - mcp_data:/app/data
     environment:
       MCP_PORT: "8080"
     healthcheck:
@@ -13,6 +13,12 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    networks:
+      - proxy
 
 volumes:
   mcp_data:
+
+networks:
+  proxy:
+    external: true
