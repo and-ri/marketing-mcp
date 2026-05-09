@@ -169,14 +169,19 @@ $http = new HttpServer(function (ServerRequestInterface $request) use ($db, $oau
         }
 
         // Verify this state was registered by a known user
-        $stmt = $db->prepare("SELECT id FROM oauth_pending WHERE state = ?");
-        $stmt->execute([$state]);
-        if (!$stmt->fetch()) {
-            return new Response(400, ['Content-Type' => 'text/html'], '<h2>Invalid or expired state.</h2>');
-        }
+        try {
+            $stmt = $db->prepare("SELECT state FROM oauth_pending WHERE state = ?");
+            $stmt->execute([$state]);
+            if (!$stmt->fetch()) {
+                return new Response(400, ['Content-Type' => 'text/html'], '<h2>Invalid or expired state.</h2>');
+            }
 
-        $db->prepare("INSERT OR REPLACE INTO oauth_callbacks (state, code) VALUES (?, ?)")
-            ->execute([$state, $code]);
+            $db->prepare("INSERT OR REPLACE INTO oauth_callbacks (state, code) VALUES (?, ?)")
+                ->execute([$state, $code]);
+        } catch (\Throwable $e) {
+            fwrite(STDERR, "[oauth/callback error] " . $e->getMessage() . "\n");
+            return new Response(500, ['Content-Type' => 'text/plain'], 'Internal error: ' . $e->getMessage());
+        }
 
         return new Response(200, ['Content-Type' => 'text/html'], $oauthSuccessHtml);
     }
