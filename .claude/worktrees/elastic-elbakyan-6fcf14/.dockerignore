@@ -1,0 +1,7 @@
+vendor/
+.env
+data/
+.git/
+.github/
+.claude/
+*.md
