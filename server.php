@@ -105,6 +105,11 @@ function mcpError(mixed $id, int $code, string $message): array
 
 function baseUrl(ServerRequestInterface $request): string
 {
+    // MCP_BASE_URL env var takes priority — set it in docker-compose.yml for reliability
+    $envBase = getenv('MCP_BASE_URL');
+    if ($envBase) {
+        return rtrim($envBase, '/');
+    }
     $scheme = $request->getHeaderLine('X-Forwarded-Proto') ?: 'http';
     $host   = $request->getHeaderLine('Host') ?: 'localhost';
     return "$scheme://$host";
