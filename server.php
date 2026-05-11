@@ -59,6 +59,13 @@ function openDb(): PDO
         code        TEXT NOT NULL,
         received_at TEXT NOT NULL DEFAULT (datetime('now'))
     )");
+    // ── Claude Connector: auth codes з PKCE ──────────────────────────────────
+    $db->exec("CREATE TABLE IF NOT EXISTS oauth_auth_codes (
+        code           TEXT PRIMARY KEY,
+        user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_challenge TEXT NOT NULL,
+        expires_at     TEXT NOT NULL
+    )");
     return $db;
 }
 
@@ -115,7 +122,7 @@ function baseUrl(ServerRequestInterface $request): string
     return "$scheme://$host";
 }
 
-// ─── Success page (shared by OAuth callbacks) ────────────────────────────────
+// ─── Success page (shared by Google/Meta OAuth callbacks) ────────────────────
 
 $oauthSuccessHtml = <<<HTML
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>Authorized</title>
@@ -128,7 +135,7 @@ h2{color:#16a34a;margin-top:0}p{color:#555}</style></head>
 </div></body></html>
 HTML;
 
-// ─── HTTP server ─────────────────────────────────────────────────────────────
+// ─── HTTP server ──────────────────────────────────────────────────────────────
 
 $db   = openDb();
 $port = (int) (getenv('MCP_PORT') ?: 8080);
@@ -151,7 +158,206 @@ $http = new HttpServer(function (ServerRequestInterface $request) use ($db, $oau
         return new Response(200, array_merge($corsHeaders, ['Content-Type' => 'text/plain']), 'OK');
     }
 
-    // ── OAuth callback (called by Google/Meta after browser auth) ────────────
+    // ── Claude Connector: OAuth 2.0 Authorization Server Metadata ────────────
+    // GET /.well-known/oauth-authorization-server
+    // Claude автоматично запитує цей endpoint щоб дізнатись де authorize/token
+    if ($path === '/.well-known/oauth-authorization-server' && $method === 'GET') {
+        $base = baseUrl($request);
+        return new Response(200,
+            array_merge($corsHeaders, ['Content-Type' => 'application/json']),
+            json_encode([
+                'issuer'                                 => $base,
+                'authorization_endpoint'                => "$base/authorize",
+                'token_endpoint'                         => "$base/token",
+                'response_types_supported'              => ['code'],
+                'grant_types_supported'                 => ['authorization_code'],
+                'code_challenge_methods_supported'      => ['S256'],
+                'token_endpoint_auth_methods_supported' => ['none'],
+            ], JSON_UNESCAPED_SLASHES)
+        );
+    }
+
+    // ── Claude Connector: Authorization endpoint (GET) — форма логіну ────────
+    // Claude відкриває цей URL у браузері користувача
+    if ($path === '/authorize' && $method === 'GET') {
+        $q             = $request->getQueryParams();
+        $state         = htmlspecialchars($q['state']          ?? '', ENT_QUOTES);
+        $clientId      = htmlspecialchars($q['client_id']      ?? '', ENT_QUOTES);
+        $redirectUri   = htmlspecialchars($q['redirect_uri']   ?? '', ENT_QUOTES);
+        $codeChallenge = htmlspecialchars($q['code_challenge'] ?? '', ENT_QUOTES);
+        $ccMethod      = htmlspecialchars($q['code_challenge_method'] ?? 'S256', ENT_QUOTES);
+
+        $html = <<<HTML
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Marketing MCP — Login</title>
+          <style>
+            body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;
+                 height:100vh;margin:0;background:#f8fafc}
+            .card{background:#fff;border-radius:12px;padding:36px 44px;
+                  box-shadow:0 4px 24px rgba(0,0,0,.10);min-width:320px}
+            h2{margin-top:0;color:#1e293b}
+            label{display:block;margin-bottom:6px;color:#475569;font-size:.9rem}
+            input[type=password]{width:100%;box-sizing:border-box;padding:10px 12px;
+                  border:1px solid #cbd5e1;border-radius:8px;font-size:1rem;margin-bottom:18px}
+            button{width:100%;padding:11px;background:#2563eb;color:#fff;border:none;
+                   border-radius:8px;font-size:1rem;cursor:pointer}
+            button:hover{background:#1d4ed8}
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h2>Marketing MCP</h2>
+            <form method="POST" action="/authorize">
+              <input type="hidden" name="state"                  value="$state">
+              <input type="hidden" name="client_id"              value="$clientId">
+              <input type="hidden" name="redirect_uri"           value="$redirectUri">
+              <input type="hidden" name="code_challenge"         value="$codeChallenge">
+              <input type="hidden" name="code_challenge_method"  value="$ccMethod">
+              <label for="token">Your access token</label>
+              <input type="password" id="token" name="token" placeholder="Bearer token" required autofocus>
+              <button type="submit">Authorize</button>
+            </form>
+          </div>
+        </body>
+        </html>
+        HTML;
+
+        return new Response(200, ['Content-Type' => 'text/html; charset=utf-8'], $html);
+    }
+
+    // ── Claude Connector: Authorization endpoint (POST) — перевірка токену ───
+    // Сервер перевіряє введений токен і редіректить назад до Claude з auth code
+    if ($path === '/authorize' && $method === 'POST') {
+        $rawBody = (string) $request->getBody();
+        parse_str($rawBody, $formData);
+
+        $token         = trim($formData['token']          ?? '');
+        $redirectUri   = trim($formData['redirect_uri']   ?? '');
+        $state         = trim($formData['state']          ?? '');
+        $codeChallenge = trim($formData['code_challenge'] ?? '');
+
+        if ($token === '' || $redirectUri === '' || $codeChallenge === '') {
+            return new Response(400, ['Content-Type' => 'text/plain'], 'Missing required fields.');
+        }
+
+        $user = resolveUser($db, $token);
+        if ($user === null) {
+            // Повертаємо форму з помилкою
+            $safeRedirect   = htmlspecialchars($redirectUri,   ENT_QUOTES);
+            $safeState      = htmlspecialchars($state,         ENT_QUOTES);
+            $safeChallenge  = htmlspecialchars($codeChallenge, ENT_QUOTES);
+            $html = <<<HTML
+            <!DOCTYPE html><html><head><meta charset="utf-8"><title>Marketing MCP — Login</title>
+            <style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;
+            height:100vh;margin:0;background:#f8fafc}.card{background:#fff;border-radius:12px;padding:36px 44px;
+            box-shadow:0 4px 24px rgba(0,0,0,.10);min-width:320px}h2{margin-top:0;color:#1e293b}
+            .err{color:#dc2626;margin-bottom:12px;font-size:.9rem}
+            label{display:block;margin-bottom:6px;color:#475569;font-size:.9rem}
+            input[type=password]{width:100%;box-sizing:border-box;padding:10px 12px;
+            border:1px solid #fca5a5;border-radius:8px;font-size:1rem;margin-bottom:18px}
+            button{width:100%;padding:11px;background:#2563eb;color:#fff;border:none;
+            border-radius:8px;font-size:1rem;cursor:pointer}button:hover{background:#1d4ed8}</style></head>
+            <body><div class="card"><h2>Marketing MCP</h2>
+            <p class="err">&#10007; Invalid token. Please try again.</p>
+            <form method="POST" action="/authorize">
+              <input type="hidden" name="state"          value="$safeState">
+              <input type="hidden" name="redirect_uri"   value="$safeRedirect">
+              <input type="hidden" name="code_challenge" value="$safeChallenge">
+              <label for="token">Your access token</label>
+              <input type="password" id="token" name="token" placeholder="Bearer token" required autofocus>
+              <button type="submit">Authorize</button>
+            </form></div></body></html>
+            HTML;
+            return new Response(401, ['Content-Type' => 'text/html; charset=utf-8'], $html);
+        }
+
+        // Генеруємо одноразовий auth code (5 хвилин)
+        $code = bin2hex(random_bytes(32));
+        $db->prepare(
+            "INSERT INTO oauth_auth_codes (code, user_id, code_challenge, expires_at)
+             VALUES (?, ?, ?, datetime('now', '+5 minutes'))"
+        )->execute([$code, (int) $user['id'], $codeChallenge]);
+
+        $location = $redirectUri . '?' . http_build_query(['code' => $code, 'state' => $state]);
+        return new Response(302, ['Location' => $location], '');
+    }
+
+    // ── Claude Connector: Token endpoint ─────────────────────────────────────
+    // Claude обмінює auth code + code_verifier → Bearer access_token
+    if ($path === '/token' && $method === 'POST') {
+        $rawBody = (string) $request->getBody();
+
+        // Підтримуємо як form-encoded так і JSON body
+        $contentType = $request->getHeaderLine('Content-Type');
+        if (str_contains($contentType, 'application/json')) {
+            $data = json_decode($rawBody, true) ?? [];
+        } else {
+            parse_str($rawBody, $data);
+        }
+
+        $code         = trim($data['code']          ?? '');
+        $codeVerifier = trim($data['code_verifier'] ?? '');
+        $grantType    = trim($data['grant_type']    ?? '');
+
+        if ($grantType !== 'authorization_code') {
+            return new Response(400,
+                array_merge($corsHeaders, ['Content-Type' => 'application/json']),
+                json_encode(['error' => 'unsupported_grant_type'])
+            );
+        }
+
+        if ($code === '' || $codeVerifier === '') {
+            return new Response(400,
+                array_merge($corsHeaders, ['Content-Type' => 'application/json']),
+                json_encode(['error' => 'invalid_request', 'error_description' => 'code and code_verifier are required'])
+            );
+        }
+
+        // Знаходимо code в БД (не протермінований)
+        $stmt = $db->prepare(
+            "SELECT * FROM oauth_auth_codes WHERE code = ? AND expires_at > datetime('now')"
+        );
+        $stmt->execute([$code]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            return new Response(400,
+                array_merge($corsHeaders, ['Content-Type' => 'application/json']),
+                json_encode(['error' => 'invalid_grant', 'error_description' => 'Code not found or expired'])
+            );
+        }
+
+        // Перевіряємо PKCE S256: BASE64URL(SHA256(code_verifier)) == code_challenge
+        $computed = rtrim(strtr(base64_encode(hash('sha256', $codeVerifier, true)), '+/', '-_'), '=');
+        if (!hash_equals($row['code_challenge'], $computed)) {
+            return new Response(400,
+                array_merge($corsHeaders, ['Content-Type' => 'application/json']),
+                json_encode(['error' => 'invalid_grant', 'error_description' => 'PKCE verification failed'])
+            );
+        }
+
+        // Видаляємо використаний code (одноразовий)
+        $db->prepare("DELETE FROM oauth_auth_codes WHERE code = ?")->execute([$code]);
+
+        // Повертаємо існуючий Bearer token користувача — /mcp працює як і раніше
+        $stmt2 = $db->prepare("SELECT token FROM users WHERE id = ?");
+        $stmt2->execute([(int) $row['user_id']]);
+        $userRow = $stmt2->fetch(PDO::FETCH_ASSOC);
+
+        return new Response(200,
+            array_merge($corsHeaders, ['Content-Type' => 'application/json']),
+            json_encode([
+                'access_token' => $userRow['token'],
+                'token_type'   => 'Bearer',
+                'expires_in'   => 365 * 24 * 3600,
+            ])
+        );
+    }
+
+    // ── Google/Meta OAuth callback (викликається після браузерної авторизації) ─
     if ($path === '/oauth/callback' && $method === 'GET') {
         $params = $request->getQueryParams();
         $state  = $params['state'] ?? '';
@@ -168,7 +374,6 @@ $http = new HttpServer(function (ServerRequestInterface $request) use ($db, $oau
             return new Response(400, ['Content-Type' => 'text/html'], '<h2>Missing state or code.</h2>');
         }
 
-        // Verify this state was registered by a known user
         try {
             $stmt = $db->prepare("SELECT state FROM oauth_pending WHERE state = ?");
             $stmt->execute([$state]);
@@ -177,7 +382,7 @@ $http = new HttpServer(function (ServerRequestInterface $request) use ($db, $oau
             }
 
             $db->prepare("INSERT OR REPLACE INTO oauth_callbacks (state, code) VALUES (?, ?)")
-                ->execute([$state, $code]);
+               ->execute([$state, $code]);
         } catch (\Throwable $e) {
             fwrite(STDERR, "[oauth/callback error] " . $e->getMessage() . "\n");
             return new Response(500, ['Content-Type' => 'text/plain'], 'Internal error: ' . $e->getMessage());
@@ -186,11 +391,12 @@ $http = new HttpServer(function (ServerRequestInterface $request) use ($db, $oau
         return new Response(200, ['Content-Type' => 'text/html'], $oauthSuccessHtml);
     }
 
+    // ── Всі інші шляхи крім /mcp → 404 ──────────────────────────────────────
     if ($path !== '/mcp' || $method !== 'POST') {
         return new Response(404, array_merge($corsHeaders, ['Content-Type' => 'text/plain']), 'Not found');
     }
 
-    // ── Bearer token auth ────────────────────────────────────────────────────
+    // ── Bearer token auth (незмінна логіка) ──────────────────────────────────
     $authHeader = $request->getHeaderLine('Authorization');
     if (!str_starts_with($authHeader, 'Bearer ')) {
         return jsonErr(401, 'Authorization: Bearer <token> required');
@@ -202,9 +408,9 @@ $http = new HttpServer(function (ServerRequestInterface $request) use ($db, $oau
         return jsonErr(401, 'Invalid token');
     }
 
-    $userId  = (int) $user['id'];
-    $env     = loadUserEnv($db, $userId);
-    $base    = baseUrl($request);
+    $userId = (int) $user['id'];
+    $env    = loadUserEnv($db, $userId);
+    $base   = baseUrl($request);
 
     // ── Parse JSON-RPC ───────────────────────────────────────────────────────
     $body    = (string) $request->getBody();
@@ -257,7 +463,10 @@ $http->listen($socket);
 
 $addr = $socket->getAddress();
 fwrite(STDERR, "Marketing MCP HTTP server listening on $addr\n");
-fwrite(STDERR, "Endpoint:       POST http://localhost:$port/mcp  (Authorization: Bearer <token>)\n");
-fwrite(STDERR, "OAuth callback: GET  http://localhost:$port/oauth/callback\n");
+fwrite(STDERR, "Endpoint:        POST http://localhost:$port/mcp  (Authorization: Bearer <token>)\n");
+fwrite(STDERR, "OAuth metadata:  GET  http://localhost:$port/.well-known/oauth-authorization-server\n");
+fwrite(STDERR, "OAuth authorize: GET  http://localhost:$port/authorize\n");
+fwrite(STDERR, "OAuth token:     POST http://localhost:$port/token\n");
+fwrite(STDERR, "OAuth callback:  GET  http://localhost:$port/oauth/callback\n");
 
 Loop::run();
