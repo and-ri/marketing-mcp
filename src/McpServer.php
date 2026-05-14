@@ -78,7 +78,7 @@ class McpServer
             'jsonrpc' => '2.0',
             'id'      => $id,
             'result'  => [
-                'protocolVersion' => '2024-11-05',
+                'protocolVersion' => '2025-03-26',
                 'capabilities'    => ['tools' => ['listChanged' => false]],
                 'serverInfo'      => ['name' => 'marketing-mcp', 'version' => '1.0.0'],
             ],

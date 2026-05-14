@@ -213,9 +213,9 @@ if (in_array($choice, ['1', '3'])) {
 }
 
 // ─── Meta OAuth2 ────────────────────────────────────────────────────────────
-// Facebook вимагає HTTPS для redirect URI, тому локальний сервер не підійде.
-// Використовуємо підхід "paste URL": браузер покаже помилку з'єднання, але
-// URL з кодом буде в адресному рядку — копіюємо його і вставляємо сюди.
+// Facebook requires HTTPS for the redirect URI, so a local server won't work.
+// We use the "paste URL" approach: the browser will show a connection error, but
+// the URL containing the code will be in the address bar — copy and paste it here.
 
 if (in_array($choice, ['2', '3'])) {
     echo PHP_EOL;
