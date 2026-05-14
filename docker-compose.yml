@@ -11,6 +11,7 @@ services:
     environment:
       MCP_PORT: "8080"
       MCP_BASE_URL: ""   # set your domain, e.g. https://mcp.example.com
+      DEBUG: "true"      # set to "false" to disable verbose request/response logging to /app/data/debug.log
     healthcheck:
       test: ["CMD", "php", "-r", "exit(file_get_contents('http://localhost:8080/health') === 'OK' ? 0 : 1);"]
       interval: 30s

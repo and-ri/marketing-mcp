@@ -25,6 +25,28 @@ set_error_handler(function (int $errno, string $errstr): bool {
 });
 error_reporting(E_ALL);
 
+// ─── Debug logging ────────────────────────────────────────────────────────────
+
+function debugLog(string $level, string $msg): void
+{
+    static $enabled = null;
+    if ($enabled === null) {
+        $enabled = filter_var(getenv('DEBUG'), FILTER_VALIDATE_BOOLEAN);
+    }
+    if (!$enabled) return;
+
+    $ts   = date('Y-m-d H:i:s');
+    $line = "[$ts] [$level] $msg\n";
+    $file = __DIR__ . '/data/debug.log';
+
+    // Rotate log at 10 MB
+    if (file_exists($file) && filesize($file) > 10 * 1024 * 1024) {
+        @rename($file, $file . '.1');
+    }
+    file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
+    fwrite(STDERR, $line);
+}
+
 // ─── Database ────────────────────────────────────────────────────────────────
 
 function openDb(): PDO
@@ -140,7 +162,32 @@ HTML;
 $db   = openDb();
 $port = (int) (getenv('MCP_PORT') ?: 8080);
 
-$http = new HttpServer(function (ServerRequestInterface $request) use ($db, $oauthSuccessHtml): Response {
+// ─── Request / response logging middleware ──────────────────────────────────
+
+$logMiddleware = function (ServerRequestInterface $request, callable $next): Response {
+    $method  = $request->getMethod();
+    $path    = $request->getUri()->getPath();
+    $ip      = $request->getServerParams()['REMOTE_ADDR'] ?? '-';
+    $authHdr = $request->getHeaderLine('Authorization');
+    $authLog = $authHdr ? (substr($authHdr, 7, 8) . '***') : '-';
+    $accept  = $request->getHeaderLine('Accept') ?: '-';
+    $ct      = $request->getHeaderLine('Content-Type') ?: '-';
+    debugLog('REQ', "$method $path  ip=$ip  auth=$authLog  accept=$accept  ct=$ct");
+
+    /** @var Response $response */
+    $response = $next($request);
+
+    $status = $response->getStatusCode();
+    if ($status >= 400) {
+        $body = (string) $response->getBody();
+        debugLog('ERR', "$status  $method $path  body=" . substr($body, 0, 300));
+    } else {
+        debugLog('RES', "$status  $method $path");
+    }
+    return $response;
+};
+
+$http = new HttpServer($logMiddleware, function (ServerRequestInterface $request) use ($db, $oauthSuccessHtml): Response {
     $path   = $request->getUri()->getPath();
     $method = $request->getMethod();
 
@@ -445,6 +492,7 @@ $http = new HttpServer(function (ServerRequestInterface $request) use ($db, $oau
     $userId = (int) $user['id'];
     $env    = loadUserEnv($db, $userId);
     $base   = baseUrl($request);
+    debugLog('AUTH', "user={$user['name']} id=$userId");
 
     // ── Parse JSON-RPC ───────────────────────────────────────────────────────
     $body    = (string) $request->getBody();
@@ -457,6 +505,8 @@ $http = new HttpServer(function (ServerRequestInterface $request) use ($db, $oau
     $server = buildServer($env, $db, $userId, $base);
     $accept = $request->getHeaderLine('Accept');
     $useSSE = str_contains($accept, 'text/event-stream');
+    $rpcMethod = isset($jsonRpc['method']) ? $jsonRpc['method'] : 'batch[' . count($jsonRpc) . ']';
+    debugLog('RPC', "user={$user['name']} method=$rpcMethod useSSE=" . ($useSSE ? 'yes' : 'no'));
 
     // ── Batch ────────────────────────────────────────────────────────────────
     if (isset($jsonRpc[0]) && is_array($jsonRpc[0])) {
@@ -502,5 +552,6 @@ fwrite(STDERR, "OAuth metadata:  GET  http://localhost:$port/.well-known/oauth-a
 fwrite(STDERR, "OAuth authorize: GET  http://localhost:$port/authorize\n");
 fwrite(STDERR, "OAuth token:     POST http://localhost:$port/token\n");
 fwrite(STDERR, "OAuth callback:  GET  http://localhost:$port/oauth/callback\n");
+fwrite(STDERR, "Debug logging:   " . (filter_var(getenv('DEBUG'), FILTER_VALIDATE_BOOLEAN) ? 'ENABLED → /app/data/debug.log' : 'disabled (set DEBUG=true to enable)') . "\n");
 
 Loop::run();
