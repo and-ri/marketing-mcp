@@ -216,6 +216,7 @@ $http = new HttpServer($logMiddleware, function (ServerRequestInterface $request
                 'issuer'                                 => $base,
                 'authorization_endpoint'                => "$base/authorize",
                 'token_endpoint'                         => "$base/token",
+                'registration_endpoint'                  => "$base/register",
                 'response_types_supported'              => ['code'],
                 'grant_types_supported'                 => ['authorization_code'],
                 'code_challenge_methods_supported'      => ['S256'],
@@ -288,6 +289,17 @@ $http = new HttpServer($logMiddleware, function (ServerRequestInterface $request
 
         if ($token === '' || $redirectUri === '' || $codeChallenge === '') {
             return new Response(400, ['Content-Type' => 'text/plain'], 'Missing required fields.');
+        }
+
+        // Validate redirect_uri: must be localhost (MCP clients) or HTTPS
+        $parsedUri = parse_url($redirectUri);
+        $uriHost   = $parsedUri['host'] ?? '';
+        $uriScheme = $parsedUri['scheme'] ?? '';
+        $isLocalhost = in_array($uriHost, ['localhost', '127.0.0.1', '::1'], true);
+        $isHttps     = $uriScheme === 'https';
+        if (!$isLocalhost && !$isHttps) {
+            return new Response(400, ['Content-Type' => 'text/plain'],
+                'Invalid redirect_uri: must be a localhost URL or HTTPS URL.');
         }
 
         $user = resolveUser($db, $token);
@@ -443,6 +455,27 @@ $http = new HttpServer($logMiddleware, function (ServerRequestInterface $request
         return new Response(405,
             array_merge($corsHeaders, ['Allow' => 'POST', 'Content-Type' => 'text/plain']),
             'Method Not Allowed. Use POST.'
+        );
+    }
+
+    // ── Dynamic Client Registration (RFC 7591) ───────────────────────────────
+    // Claude Code and other MCP clients attempt POST /register before the OAuth flow.
+    // We accept any registration and echo back a client_id (we don't enforce it).
+    if ($path === '/register' && $method === 'POST') {
+        $rawBody = (string) $request->getBody();
+        $data    = json_decode($rawBody, true) ?? [];
+
+        $clientId = 'mcp-client-' . bin2hex(random_bytes(8));
+        return new Response(201,
+            array_merge($corsHeaders, ['Content-Type' => 'application/json']),
+            json_encode([
+                'client_id'                => $clientId,
+                'client_id_issued_at'      => time(),
+                'redirect_uris'            => $data['redirect_uris'] ?? [],
+                'token_endpoint_auth_method' => 'none',
+                'grant_types'              => ['authorization_code'],
+                'response_types'           => ['code'],
+            ], JSON_UNESCAPED_SLASHES)
         );
     }
 

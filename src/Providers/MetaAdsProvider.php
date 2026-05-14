@@ -52,7 +52,7 @@ class MetaAdsProvider
             'List all accessible Meta (Facebook/Instagram) ad accounts.',
             [
                 'type'       => 'object',
-                'properties' => [],
+                'properties' => new stdClass(),
                 'required'   => [],
             ],
             [$this, 'getAdAccounts']

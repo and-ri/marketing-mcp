@@ -194,7 +194,7 @@ class AuthProvider
             If auth_finish_google returns "waiting", the browser step hasn't completed
             yet. Complete the sign-in first, then call this tool again.
             DESC,
-            ['type' => 'object', 'properties' => [], 'required' => []],
+            ['type' => 'object', 'properties' => new stdClass(), 'required' => []],
             [$this, 'finishGoogle']
         );
 
@@ -279,7 +279,7 @@ class AuthProvider
             If auth_finish_meta returns "waiting", the browser step hasn't completed
             yet. Complete the sign-in first, then call this tool again.
             DESC,
-            ['type' => 'object', 'properties' => [], 'required' => []],
+            ['type' => 'object', 'properties' => new stdClass(), 'required' => []],
             [$this, 'finishMeta']
         );
 
@@ -287,7 +287,7 @@ class AuthProvider
             'auth_status',
             'Show which platforms are currently authorized for this user, '
             . 'which credentials are missing, and what to do next.',
-            ['type' => 'object', 'properties' => [], 'required' => []],
+            ['type' => 'object', 'properties' => new stdClass(), 'required' => []],
             [$this, 'status']
         );
     }

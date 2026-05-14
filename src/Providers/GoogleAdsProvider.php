@@ -39,6 +39,15 @@ class GoogleAdsProvider
         return $this->client;
     }
 
+    private function numericId(mixed $value): int
+    {
+        $id = (int) preg_replace('/[^0-9]/', '', (string) $value);
+        if ($id <= 0) {
+            throw new \InvalidArgumentException("Invalid numeric ID: $value");
+        }
+        return $id;
+    }
+
     private function gaql(string $customerId, string $query): array
     {
         $request = new SearchGoogleAdsStreamRequest([
@@ -63,7 +72,7 @@ class GoogleAdsProvider
             'List all accessible Google Ads customer accounts (accounts you can manage).',
             [
                 'type'       => 'object',
-                'properties' => [],
+                'properties' => new stdClass(),
                 'required'   => [],
             ],
             [$this, 'listCustomers']
@@ -246,7 +255,7 @@ class GoogleAdsProvider
         $customerId = $args['customer_id'];
         $dateRange  = $args['date_range'] ?? 'LAST_30_DAYS';
         $campaignFilter = isset($args['campaign_id'])
-            ? "AND campaign.id = {$args['campaign_id']}"
+            ? 'AND campaign.id = ' . $this->numericId($args['campaign_id'])
             : '';
 
         $query = "
@@ -281,10 +290,10 @@ class GoogleAdsProvider
         $limit        = $args['limit'] ?? 200;
         $filters      = ["ad_group_criterion.type = 'KEYWORD'"];
         if (!empty($args['campaign_id'])) {
-            $filters[] = "campaign.id = {$args['campaign_id']}";
+            $filters[] = 'campaign.id = ' . $this->numericId($args['campaign_id']);
         }
         if (!empty($args['ad_group_id'])) {
-            $filters[] = "ad_group.id = {$args['ad_group_id']}";
+            $filters[] = 'ad_group.id = ' . $this->numericId($args['ad_group_id']);
         }
         $where = implode(' AND ', $filters);
 
@@ -327,7 +336,7 @@ class GoogleAdsProvider
         $dateRange  = $args['date_range'] ?? 'LAST_30_DAYS';
         $limit      = $args['limit'] ?? 200;
         $campaignFilter = !empty($args['campaign_id'])
-            ? "AND campaign.id = {$args['campaign_id']}"
+            ? 'AND campaign.id = ' . $this->numericId($args['campaign_id'])
             : '';
 
         $query = "
@@ -362,10 +371,10 @@ class GoogleAdsProvider
         $limit      = $args['limit'] ?? 100;
         $filters    = [];
         if (!empty($args['campaign_id'])) {
-            $filters[] = "campaign.id = {$args['campaign_id']}";
+            $filters[] = 'campaign.id = ' . $this->numericId($args['campaign_id']);
         }
         if (!empty($args['ad_group_id'])) {
-            $filters[] = "ad_group.id = {$args['ad_group_id']}";
+            $filters[] = 'ad_group.id = ' . $this->numericId($args['ad_group_id']);
         }
         $where = $filters ? ('AND ' . implode(' AND ', $filters)) : '';
 
@@ -409,7 +418,7 @@ class GoogleAdsProvider
         $dateRange  = $args['date_range'] ?? 'LAST_30_DAYS';
         $limit      = $args['limit'] ?? 100;
         $campaignFilter = !empty($args['campaign_id'])
-            ? "AND campaign.id = {$args['campaign_id']}"
+            ? 'AND campaign.id = ' . $this->numericId($args['campaign_id'])
             : '';
 
         $query = "
