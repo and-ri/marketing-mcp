@@ -201,6 +201,54 @@ class GoogleAdsProvider
             ],
             [$this, 'runQuery']
         );
+
+        $server->registerTool(
+            'google_ads_get_asset_performance',
+            'Get performance of individual ad assets (headlines, descriptions, images, sitelinks) in RSA and Performance Max campaigns. Includes asset performance labels: BEST, GOOD, LOW, UNRATED. Essential for creative optimization.',
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'customer_id' => ['type' => 'string', 'description' => 'Google Ads customer ID'],
+                    'campaign_id' => ['type' => 'string', 'description' => 'Optional: filter by campaign ID'],
+                    'asset_type'  => ['type' => 'string', 'description' => 'Filter by asset type: TEXT, IMAGE, YOUTUBE_VIDEO, or ALL', 'default' => 'ALL'],
+                    'date_range'  => ['type' => 'string', 'default' => 'LAST_30_DAYS'],
+                    'limit'       => ['type' => 'integer', 'default' => 200],
+                ],
+                'required' => ['customer_id'],
+            ],
+            [$this, 'getAssetPerformance']
+        );
+
+        $server->registerTool(
+            'google_ads_get_segments',
+            'Get campaign performance segmented by device, day of week, or hour of day. Use to identify when and where ads perform best — critical for bid adjustments.',
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'customer_id' => ['type' => 'string', 'description' => 'Google Ads customer ID'],
+                    'campaign_id' => ['type' => 'string', 'description' => 'Optional: filter by campaign ID'],
+                    'segment'     => ['type' => 'string', 'description' => 'Segment dimension: device, day_of_week, hour_of_day', 'default' => 'device'],
+                    'date_range'  => ['type' => 'string', 'default' => 'LAST_30_DAYS'],
+                ],
+                'required' => ['customer_id'],
+            ],
+            [$this, 'getSegments']
+        );
+
+        $server->registerTool(
+            'google_ads_get_conversions',
+            'Get conversion actions with configuration details and performance stats. Shows conversion types, attribution models, counting methods, and per-conversion-action metrics.',
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'customer_id' => ['type' => 'string', 'description' => 'Google Ads customer ID'],
+                    'date_range'  => ['type' => 'string', 'default' => 'LAST_30_DAYS'],
+                    'limit'       => ['type' => 'integer', 'default' => 100],
+                ],
+                'required' => ['customer_id'],
+            ],
+            [$this, 'getConversions']
+        );
     }
 
     public function listCustomers(array $args): array
@@ -480,5 +528,129 @@ class GoogleAdsProvider
     {
         $rows = $this->gaql($args['customer_id'], $args['query']);
         return ['results' => $rows, 'total' => count($rows)];
+    }
+
+    public function getAssetPerformance(array $args): array
+    {
+        $customerId    = $args['customer_id'];
+        $dateRange     = $args['date_range'] ?? 'LAST_30_DAYS';
+        $limit         = $args['limit'] ?? 200;
+        $assetType     = $args['asset_type'] ?? 'ALL';
+        $campaignFilter = !empty($args['campaign_id'])
+            ? 'AND campaign.id = ' . $this->numericId($args['campaign_id'])
+            : '';
+        $typeFilter = $assetType !== 'ALL'
+            ? "AND asset.type = '$assetType'"
+            : '';
+
+        $query = "
+            SELECT
+                asset.id,
+                asset.name,
+                asset.type,
+                asset.text_asset.text,
+                asset.image_asset.full_size.url,
+                asset.image_asset.full_size.width_pixels,
+                asset.image_asset.full_size.height_pixels,
+                asset.youtube_video_asset.youtube_video_id,
+                ad_group_ad_asset_view.field_type,
+                ad_group_ad_asset_view.performance_label,
+                ad_group_ad_asset_view.enabled,
+                ad_group_ad_asset_view.pinned_field,
+                campaign.id,
+                campaign.name,
+                ad_group.id,
+                ad_group.name,
+                metrics.impressions,
+                metrics.clicks,
+                metrics.cost_micros,
+                metrics.conversions,
+                metrics.ctr
+            FROM ad_group_ad_asset_view
+            WHERE segments.date DURING $dateRange
+            $campaignFilter
+            $typeFilter
+            ORDER BY metrics.impressions DESC
+            LIMIT $limit
+        ";
+
+        $rows = $this->gaql($customerId, $query);
+        return ['assets' => $rows, 'total' => count($rows), 'date_range' => $dateRange];
+    }
+
+    public function getSegments(array $args): array
+    {
+        $customerId    = $args['customer_id'];
+        $dateRange     = $args['date_range'] ?? 'LAST_30_DAYS';
+        $segment       = $args['segment'] ?? 'device';
+        $campaignFilter = !empty($args['campaign_id'])
+            ? 'AND campaign.id = ' . $this->numericId($args['campaign_id'])
+            : '';
+
+        $segmentField = match ($segment) {
+            'day_of_week'  => 'segments.day_of_week',
+            'hour_of_day'  => 'segments.hour_of_day',
+            default        => 'segments.device',
+        };
+
+        $query = "
+            SELECT
+                campaign.id,
+                campaign.name,
+                $segmentField,
+                metrics.impressions,
+                metrics.clicks,
+                metrics.cost_micros,
+                metrics.conversions,
+                metrics.conversions_value,
+                metrics.ctr,
+                metrics.average_cpc,
+                metrics.average_cpm
+            FROM campaign
+            WHERE segments.date DURING $dateRange
+            AND campaign.status IN ('ENABLED', 'PAUSED')
+            $campaignFilter
+            ORDER BY metrics.cost_micros DESC
+        ";
+
+        $rows = $this->gaql($customerId, $query);
+        return ['segments' => $rows, 'total' => count($rows), 'segment' => $segment, 'date_range' => $dateRange];
+    }
+
+    public function getConversions(array $args): array
+    {
+        $customerId = $args['customer_id'];
+        $dateRange  = $args['date_range'] ?? 'LAST_30_DAYS';
+        $limit      = $args['limit'] ?? 100;
+
+        $query = "
+            SELECT
+                conversion_action.id,
+                conversion_action.name,
+                conversion_action.status,
+                conversion_action.type,
+                conversion_action.category,
+                conversion_action.counting_type,
+                conversion_action.attribution_model_settings.attribution_model,
+                conversion_action.value_settings.default_value,
+                conversion_action.value_settings.always_use_default_value,
+                conversion_action.click_through_lookback_window_days,
+                conversion_action.view_through_lookback_window_days,
+                conversion_action.include_in_conversions_metric,
+                metrics.conversions,
+                metrics.conversions_value,
+                metrics.all_conversions,
+                metrics.all_conversions_value,
+                metrics.cost_per_conversion,
+                metrics.conversion_rate
+            FROM conversion_action
+            WHERE segments.date DURING $dateRange
+            AND conversion_action.status != 'REMOVED'
+            ORDER BY metrics.conversions DESC
+            LIMIT $limit
+        ";
+
+        $rows = $this->gaql($customerId, $query);
+        return ['conversions' => $rows, 'total' => count($rows), 'date_range' => $dateRange];
     }
 }
