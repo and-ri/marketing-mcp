@@ -240,7 +240,7 @@ class MetaAdsProvider
             try {
                 $campaign = new Campaign($row['id']);
                 $insights = $campaign->getInsights(
-                    ['impressions', 'clicks', 'spend', 'ctr', 'cpc', 'cpm', 'reach', 'frequency', 'actions', 'action_values', 'roas'],
+                    ['impressions', 'clicks', 'spend', 'ctr', 'cpc', 'cpm', 'reach', 'frequency', 'actions', 'action_values'],
                     ['date_preset' => $datePreset, 'limit' => 1]
                 );
                 $row['insights'] = count($insights) > 0 ? $insights[0]->exportAllData() : [];
