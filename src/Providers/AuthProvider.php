@@ -284,6 +284,71 @@ class AuthProvider
         );
 
         $server->registerTool(
+            'auth_start_tiktok',
+            <<<DESC
+            Start TikTok Ads OAuth2 authorization.
+            Returns a URL the user must open in their browser. After completing the
+            browser sign-in, call auth_finish_tiktok to save the credentials.
+
+            ── WHAT YOU NEED BEFORE CALLING THIS TOOL ──────────────────────────────
+
+            STEP 1 — Create a TikTok for Business developer app
+            ● Go to https://business-api.tiktok.com/portal/en/start
+            ● Click "Create App" → fill in App Name, category, description
+            ● App Type: Web (required for OAuth redirect flow)
+
+            STEP 2 — Add the Marketing API product
+            ● In your app settings → "My Apps" → select your app
+            ● Products → find "Marketing API" → click Apply
+            ● Enable the following scopes: Ads Management (Read)
+
+            STEP 3 — Set the redirect URI
+            ● App settings → Basic Info → Callback URL
+            ● Add: $callbackUrl
+            ● Save changes
+
+            STEP 4 — Get App ID and App Secret
+            ● App settings → Basic Info
+            ● Copy "App ID" and "App Secret"
+
+            ── PARAMETERS ──────────────────────────────────────────────────────────
+            app_id     — App ID from Step 4
+            app_secret — App Secret from Step 4
+            DESC,
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'app_id'     => ['type' => 'string', 'description' => 'TikTok App ID (from business-api.tiktok.com → My Apps → Basic Info)'],
+                    'app_secret' => ['type' => 'string', 'description' => 'TikTok App Secret (same page)'],
+                ],
+                'required' => ['app_id', 'app_secret'],
+            ],
+            [$this, 'startTikTok']
+        );
+
+        $server->registerTool(
+            'auth_finish_tiktok',
+            <<<DESC
+            Complete TikTok Ads OAuth2 authorization.
+
+            Call this AFTER:
+            1. You called auth_start_tiktok and received a URL
+            2. You opened that URL in a browser and clicked "Confirm"
+            3. The browser showed "Authorized! You can close this tab."
+
+            If auth_finish_tiktok returns "waiting", the browser step hasn't completed
+            yet. Complete the sign-in first, then call this tool again.
+
+            If the browser shows an error:
+            ● "Redirect URI mismatch" — the redirect URI in your TikTok app settings
+              must match exactly: $callbackUrl
+              Go to business-api.tiktok.com → My Apps → your app → Basic Info → Callback URL
+            DESC,
+            ['type' => 'object', 'properties' => new stdClass(), 'required' => []],
+            [$this, 'finishTikTok']
+        );
+
+        $server->registerTool(
             'auth_status',
             'Show which platforms are currently authorized for this user, '
             . 'which credentials are missing, and what to do next.',
@@ -518,31 +583,132 @@ class AuthProvider
         ];
     }
 
+    public function startTikTok(array $args): array
+    {
+        $appId     = $args['app_id'];
+        $appSecret = $args['app_secret'];
+
+        $this->saveEnv([
+            'TIKTOK_APP_ID'     => $appId,
+            'TIKTOK_APP_SECRET' => $appSecret,
+        ]);
+
+        $state = bin2hex(random_bytes(16));
+        $this->storePending($state, 'tiktok');
+
+        $authUrl = 'https://business-api.tiktok.com/portal/auth?' . http_build_query([
+            'app_id'       => $appId,
+            'state'        => $state,
+            'redirect_uri' => $this->callbackUrl(),
+        ]);
+
+        return [
+            'status'            => 'pending',
+            'auth_url'          => $authUrl,
+            'redirect_uri_used' => $this->callbackUrl(),
+            'next_step'         => 'Open auth_url in your browser → click "Confirm" to grant access. '
+                . 'Then call auth_finish_tiktok.',
+            'if_you_see_redirect_error' =>
+                'The URI "' . $this->callbackUrl() . '" must match the Callback URL in your TikTok app. '
+                . 'Go to business-api.tiktok.com → My Apps → your app → Basic Info → Callback URL.',
+        ];
+    }
+
+    public function finishTikTok(array $args): array
+    {
+        $result = $this->consumeCode('tiktok');
+
+        if ($result['status'] === 'no_pending') {
+            return [
+                'status'    => 'error',
+                'message'   => 'No pending TikTok authorization found.',
+                'next_step' => 'Call auth_start_tiktok first with your app_id and app_secret.',
+            ];
+        }
+
+        if ($result['status'] === 'waiting') {
+            return [
+                'status'    => 'waiting',
+                'message'   => 'The browser authorization has not been completed yet.',
+                'next_step' => 'Open the URL returned by auth_start_tiktok in a browser, '
+                    . 'click "Confirm", wait for the "Authorized!" page, then call auth_finish_tiktok again.',
+            ];
+        }
+
+        $env    = $this->freshEnv();
+        $appId  = $env['TIKTOK_APP_ID']     ?? '';
+        $secret = $env['TIKTOK_APP_SECRET'] ?? '';
+        $ctx    = stream_context_create([
+            'http' => [
+                'method'        => 'POST',
+                'header'        => "Content-Type: application/json\r\n",
+                'content'       => json_encode([
+                    'app_id'    => $appId,
+                    'auth_code' => $result['code'],
+                    'secret'    => $secret,
+                ]),
+                'ignore_errors' => true,
+            ],
+        ]);
+
+        $resp = json_decode(
+            (string) file_get_contents(
+                'https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/',
+                false, $ctx
+            ),
+            true
+        );
+
+        if (($resp['code'] ?? -1) !== 0 || empty($resp['data']['access_token'])) {
+            return [
+                'status'    => 'error',
+                'message'   => 'Token exchange failed: ' . json_encode($resp),
+                'next_step' => 'Check that app_id and app_secret are correct, '
+                    . 'and that the redirect URI is registered in your TikTok app.',
+            ];
+        }
+
+        $data        = $resp['data'];
+        $accessToken = $data['access_token'];
+        $advertisers = $data['advertiser_info'] ?? [];
+
+        $this->saveEnv(['TIKTOK_ACCESS_TOKEN' => $accessToken]);
+
+        return [
+            'status'              => 'success',
+            'message'             => 'TikTok Ads credentials saved successfully.',
+            'token_preview'       => substr($accessToken, 0, 20) . '…',
+            'advertisers'         => $advertisers,
+            'what_you_can_do_now' => [
+                'TikTok Ads' => 'Call tiktok_get_advertisers to see your ad accounts, '
+                    . 'then use tiktok_get_campaigns with an advertiser_id.',
+            ],
+        ];
+    }
+
     public function status(array $args): array
     {
         $env = $this->freshEnv();
 
-        $hasGoogleOAuth   = !empty($env['GOOGLE_ADS_CLIENT_ID']) && !empty($env['GOOGLE_ADS_CLIENT_SECRET']);
-        $hasGoogleToken   = !empty($env['GOOGLE_ADS_REFRESH_TOKEN']);
-        $hasDevToken      = !empty($env['GOOGLE_ADS_DEVELOPER_TOKEN']);
-        $hasAnalytics     = !empty($env['GOOGLE_REFRESH_TOKEN']) && !empty($env['GOOGLE_CLIENT_ID']);
-        $hasMetaApp       = !empty($env['META_APP_ID']) && !empty($env['META_APP_SECRET']);
-        $hasMetaToken     = !empty($env['META_ACCESS_TOKEN']);
+        $hasGoogleOAuth = !empty($env['GOOGLE_ADS_CLIENT_ID']) && !empty($env['GOOGLE_ADS_CLIENT_SECRET']);
+        $hasGoogleToken = !empty($env['GOOGLE_ADS_REFRESH_TOKEN']);
+        $hasDevToken    = !empty($env['GOOGLE_ADS_DEVELOPER_TOKEN']);
+        $hasAnalytics   = !empty($env['GOOGLE_REFRESH_TOKEN']) && !empty($env['GOOGLE_CLIENT_ID']);
+        $hasMetaApp     = !empty($env['META_APP_ID']) && !empty($env['META_APP_SECRET']);
+        $hasMetaToken   = !empty($env['META_ACCESS_TOKEN']);
+        $hasTikTokApp   = !empty($env['TIKTOK_APP_ID']) && !empty($env['TIKTOK_APP_SECRET']);
+        $hasTikTokToken = !empty($env['TIKTOK_ACCESS_TOKEN']);
 
-        $googleAdsOk     = $hasGoogleOAuth && $hasGoogleToken && $hasDevToken;
-        $analyticsOk     = $hasAnalytics;
-        $metaOk          = $hasMetaApp && $hasMetaToken;
+        $googleAdsOk = $hasGoogleOAuth && $hasGoogleToken && $hasDevToken;
+        $analyticsOk = $hasAnalytics;
+        $metaOk      = $hasMetaApp && $hasMetaToken;
+        $tikTokOk    = $hasTikTokApp && $hasTikTokToken;
 
         $result = [
-            'google_ads' => [
-                'status' => $googleAdsOk ? '✓ configured' : '✗ not configured',
-            ],
-            'google_analytics' => [
-                'status' => $analyticsOk ? '✓ configured' : '✗ not configured',
-            ],
-            'meta_ads' => [
-                'status' => $metaOk ? '✓ configured' : '✗ not configured',
-            ],
+            'google_ads'       => ['status' => $googleAdsOk ? '✓ configured' : '✗ not configured'],
+            'google_analytics' => ['status' => $analyticsOk ? '✓ configured' : '✗ not configured'],
+            'meta_ads'         => ['status' => $metaOk      ? '✓ configured' : '✗ not configured'],
+            'tiktok_ads'       => ['status' => $tikTokOk    ? '✓ configured' : '✗ not configured'],
         ];
 
         if (!$googleAdsOk || !$analyticsOk) {
@@ -557,9 +723,9 @@ class AuthProvider
             if (!$hasGoogleToken) {
                 $missing[] = 'refresh_token — complete the OAuth flow';
             }
-            $result['google_ads']['missing']   = $missing;
-            $result['google_analytics']['missing'] = $missing;
-            $result['google_ads']['next_step'] =
+            $result['google_ads']['missing']          = $missing;
+            $result['google_analytics']['missing']    = $missing;
+            $result['google_ads']['next_step']        =
                 'Call auth_start_google with your client_id, client_secret, and developer_token. '
                 . 'The tool description contains step-by-step instructions for getting these values.';
         }
@@ -579,9 +745,25 @@ class AuthProvider
                 . 'The tool description contains step-by-step instructions for creating a Meta developer app.';
         }
 
-        if ($googleAdsOk && $analyticsOk && $metaOk) {
+        if (!$tikTokOk) {
+            $missing = [];
+            if (!$hasTikTokApp) {
+                $missing[] = 'App ID and App Secret — get them at '
+                    . 'business-api.tiktok.com → My Apps → your app → Basic Info';
+            }
+            if (!$hasTikTokToken) {
+                $missing[] = 'access_token — complete the OAuth flow';
+            }
+            $result['tiktok_ads']['missing']   = $missing;
+            $result['tiktok_ads']['next_step'] =
+                'Call auth_start_tiktok with your app_id and app_secret. '
+                . 'The tool description contains step-by-step instructions for creating a TikTok developer app.';
+        }
+
+        if ($googleAdsOk && $analyticsOk && $metaOk && $tikTokOk) {
             $result['summary'] = 'All platforms are configured. '
-                . 'Use google_ads_list_customers and meta_get_ad_accounts to discover account IDs.';
+                . 'Use google_ads_list_customers, meta_get_ad_accounts, '
+                . 'and tiktok_get_advertisers to discover account IDs.';
         }
 
         return $result;
