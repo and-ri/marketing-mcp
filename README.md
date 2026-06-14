@@ -320,6 +320,75 @@ FROM shopping_performance_view WHERE segments.date DURING LAST_30_DAYS
 
 ---
 
+### `google_ads_get_change_history`
+
+Account change history — who changed what and when (campaigns, ad groups, bids, budgets, ads, criteria). Google retains only the **last 30 days**.
+
+| Parameter | Type | Required | Default |
+|---|---|---|---|
+| `customer_id` | string | yes | — |
+| `days` | integer | no | `14` (max 30) |
+| `resource_type` | string | no | — e.g. `CAMPAIGN`, `AD_GROUP`, `AD_GROUP_AD`, `CAMPAIGN_BUDGET` |
+| `limit` | integer | no | `500` (max 10000) |
+
+**Returns:** `{ changes: [...], total, days }`
+
+---
+
+### `google_ads_get_negative_keyword_lists`
+
+Shared negative keyword lists (shared sets of type `NEGATIVE_KEYWORDS`): the lists, their keyword members, and which campaigns each is attached to.
+
+| Parameter | Type | Required | Default |
+|---|---|---|---|
+| `customer_id` | string | yes | — |
+
+**Returns:** `{ lists: [...], members: [...], attachments: [...], total_lists }`
+
+---
+
+### `google_ads_get_negative_keywords`
+
+Negative keywords applied directly at the campaign and ad group levels (excludes shared lists).
+
+| Parameter | Type | Required | Default |
+|---|---|---|---|
+| `customer_id` | string | yes | — |
+| `campaign_id` | string | no | — |
+| `limit` | integer | no | `500` |
+
+**Returns:** `{ campaign_level: [...], ad_group_level: [...], total }`
+
+---
+
+### `google_ads_get_audiences`
+
+Audience segments / user lists, including custom-uploaded Customer Match lists (`user_list.type = CRM_BASED`) with match rates, plus remarketing, similar, rule-based lists and combined audiences. Shows sizes, membership status, and eligibility.
+
+| Parameter | Type | Required | Default |
+|---|---|---|---|
+| `customer_id` | string | yes | — |
+| `list_type` | string | no | — e.g. `CRM_BASED`, `REMARKETING`, `SIMILAR`, `RULE_BASED`, `LOGICAL` |
+
+**Returns:** `{ user_lists: [...], audiences: [...], total_user_lists }`
+
+---
+
+### `google_ads_get_audience_performance`
+
+Performance of audience segments attached to campaigns and ad groups (`campaign_audience_view`, `ad_group_audience_view`) with impressions, clicks, cost, and conversions per audience.
+
+| Parameter | Type | Required | Default |
+|---|---|---|---|
+| `customer_id` | string | yes | — |
+| `campaign_id` | string | no | — |
+| `date_range` | string | no | `LAST_30_DAYS` |
+| `limit` | integer | no | `200` |
+
+**Returns:** `{ ad_group_level: [...], campaign_level: [...], total, date_range }`
+
+---
+
 ## Google Analytics 4 tools
 
 `start_date` / `end_date`: relative (`today`, `yesterday`, `7daysAgo`, `30daysAgo`) or absolute `YYYY-MM-DD`.

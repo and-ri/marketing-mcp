@@ -249,6 +249,80 @@ class GoogleAdsProvider
             ],
             [$this, 'getConversions']
         );
+
+        $server->registerTool(
+            'google_ads_get_change_history',
+            'Get the account change history (change_event) — who changed what and when across campaigns, ad groups, bids, budgets, ads, and criteria. Google only retains the last 30 days of change history.',
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'customer_id'   => ['type' => 'string', 'description' => 'Google Ads customer ID'],
+                    'days'          => ['type' => 'integer', 'description' => 'How many past days to fetch (max 30, capped automatically)', 'default' => 14],
+                    'resource_type' => ['type' => 'string', 'description' => 'Optional filter, e.g. CAMPAIGN, AD_GROUP, AD_GROUP_AD, AD_GROUP_CRITERION, CAMPAIGN_CRITERION, CAMPAIGN_BUDGET, BIDDING_STRATEGY'],
+                    'limit'         => ['type' => 'integer', 'description' => 'Max rows (Google hard limit 10000)', 'default' => 500],
+                ],
+                'required' => ['customer_id'],
+            ],
+            [$this, 'getChangeHistory']
+        );
+
+        $server->registerTool(
+            'google_ads_get_negative_keyword_lists',
+            'Get shared negative keyword lists (shared sets of type NEGATIVE_KEYWORDS): the lists, their keyword members, and which campaigns each list is attached to.',
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'customer_id' => ['type' => 'string', 'description' => 'Google Ads customer ID'],
+                ],
+                'required' => ['customer_id'],
+            ],
+            [$this, 'getNegativeKeywordLists']
+        );
+
+        $server->registerTool(
+            'google_ads_get_negative_keywords',
+            'Get negative keywords applied directly at the campaign level and the ad group level (excludes shared lists — use google_ads_get_negative_keyword_lists for those).',
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'customer_id' => ['type' => 'string', 'description' => 'Google Ads customer ID'],
+                    'campaign_id' => ['type' => 'string', 'description' => 'Optional: filter by campaign ID'],
+                    'limit'       => ['type' => 'integer', 'default' => 500],
+                ],
+                'required' => ['customer_id'],
+            ],
+            [$this, 'getNegativeKeywords']
+        );
+
+        $server->registerTool(
+            'google_ads_get_audiences',
+            'Get audience segments / user lists, including custom-uploaded Customer Match lists (user_list.type = CRM_BASED) with match rates, plus remarketing, similar, rule-based lists and combined audiences. Shows sizes, membership status and eligibility.',
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'customer_id' => ['type' => 'string', 'description' => 'Google Ads customer ID'],
+                    'list_type'   => ['type' => 'string', 'description' => 'Optional user_list.type filter, e.g. CRM_BASED (uploaded Customer Match), REMARKETING, SIMILAR, RULE_BASED, LOGICAL'],
+                ],
+                'required' => ['customer_id'],
+            ],
+            [$this, 'getAudiences']
+        );
+
+        $server->registerTool(
+            'google_ads_get_audience_performance',
+            'Get performance of audience segments attached to campaigns and ad groups (campaign_audience_view, ad_group_audience_view) with impressions, clicks, cost, and conversions per audience.',
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'customer_id' => ['type' => 'string', 'description' => 'Google Ads customer ID'],
+                    'campaign_id' => ['type' => 'string', 'description' => 'Optional: filter by campaign ID'],
+                    'date_range'  => ['type' => 'string', 'default' => 'LAST_30_DAYS'],
+                    'limit'       => ['type' => 'integer', 'default' => 200],
+                ],
+                'required' => ['customer_id'],
+            ],
+            [$this, 'getAudiencePerformance']
+        );
     }
 
     public function listCustomers(array $args): array
@@ -652,5 +726,244 @@ class GoogleAdsProvider
 
         $rows = $this->gaql($customerId, $query);
         return ['conversions' => $rows, 'total' => count($rows), 'date_range' => $dateRange];
+    }
+
+    public function getChangeHistory(array $args): array
+    {
+        $customerId = $args['customer_id'];
+        $days       = min(max((int) ($args['days'] ?? 14), 1), 30);
+        $limit      = min((int) ($args['limit'] ?? 500), 10000);
+        $start      = date('Y-m-d H:i:s', strtotime("-$days days"));
+        $end        = date('Y-m-d H:i:s');
+
+        $typeFilter = '';
+        if (!empty($args['resource_type'])) {
+            $type = preg_replace('/[^A-Z_]/', '', strtoupper((string) $args['resource_type']));
+            if ($type !== '') {
+                $typeFilter = "AND change_event.change_resource_type = '$type'";
+            }
+        }
+
+        $query = "
+            SELECT
+                change_event.change_date_time,
+                change_event.user_email,
+                change_event.client_type,
+                change_event.change_resource_type,
+                change_event.resource_change_operation,
+                change_event.changed_fields,
+                change_event.old_resource,
+                change_event.new_resource,
+                change_event.campaign,
+                change_event.ad_group
+            FROM change_event
+            WHERE change_event.change_date_time >= '$start'
+            AND change_event.change_date_time <= '$end'
+            $typeFilter
+            ORDER BY change_event.change_date_time DESC
+            LIMIT $limit
+        ";
+
+        $rows = $this->gaql($customerId, $query);
+        return ['changes' => $rows, 'total' => count($rows), 'days' => $days];
+    }
+
+    public function getNegativeKeywordLists(array $args): array
+    {
+        $customerId = $args['customer_id'];
+
+        $lists = $this->gaql($customerId, "
+            SELECT
+                shared_set.id,
+                shared_set.name,
+                shared_set.type,
+                shared_set.status,
+                shared_set.member_count,
+                shared_set.reference_count
+            FROM shared_set
+            WHERE shared_set.type = 'NEGATIVE_KEYWORDS'
+            AND shared_set.status != 'REMOVED'
+        ");
+
+        $members = $this->gaql($customerId, "
+            SELECT
+                shared_set.id,
+                shared_set.name,
+                shared_criterion.keyword.text,
+                shared_criterion.keyword.match_type
+            FROM shared_criterion
+            WHERE shared_set.type = 'NEGATIVE_KEYWORDS'
+            AND shared_criterion.type = 'KEYWORD'
+        ");
+
+        $attachments = $this->gaql($customerId, "
+            SELECT
+                campaign.id,
+                campaign.name,
+                shared_set.id,
+                shared_set.name
+            FROM campaign_shared_set
+            WHERE shared_set.type = 'NEGATIVE_KEYWORDS'
+            AND campaign_shared_set.status != 'REMOVED'
+        ");
+
+        return [
+            'lists'       => $lists,
+            'members'     => $members,
+            'attachments' => $attachments,
+            'total_lists' => count($lists),
+        ];
+    }
+
+    public function getNegativeKeywords(array $args): array
+    {
+        $customerId = $args['customer_id'];
+        $limit      = $args['limit'] ?? 500;
+        $campaignFilter = !empty($args['campaign_id'])
+            ? 'AND campaign.id = ' . $this->numericId($args['campaign_id'])
+            : '';
+
+        $campaignLevel = $this->gaql($customerId, "
+            SELECT
+                campaign.id,
+                campaign.name,
+                campaign_criterion.keyword.text,
+                campaign_criterion.keyword.match_type
+            FROM campaign_criterion
+            WHERE campaign_criterion.negative = TRUE
+            AND campaign_criterion.type = 'KEYWORD'
+            $campaignFilter
+            LIMIT $limit
+        ");
+
+        $adGroupLevel = $this->gaql($customerId, "
+            SELECT
+                campaign.id,
+                campaign.name,
+                ad_group.id,
+                ad_group.name,
+                ad_group_criterion.keyword.text,
+                ad_group_criterion.keyword.match_type
+            FROM ad_group_criterion
+            WHERE ad_group_criterion.negative = TRUE
+            AND ad_group_criterion.type = 'KEYWORD'
+            $campaignFilter
+            LIMIT $limit
+        ");
+
+        return [
+            'campaign_level' => $campaignLevel,
+            'ad_group_level' => $adGroupLevel,
+            'total'          => count($campaignLevel) + count($adGroupLevel),
+        ];
+    }
+
+    public function getAudiences(array $args): array
+    {
+        $customerId = $args['customer_id'];
+        $typeFilter = '';
+        if (!empty($args['list_type'])) {
+            $type = preg_replace('/[^A-Z_]/', '', strtoupper((string) $args['list_type']));
+            if ($type !== '') {
+                $typeFilter = "AND user_list.type = '$type'";
+            }
+        }
+
+        $userLists = $this->gaql($customerId, "
+            SELECT
+                user_list.id,
+                user_list.name,
+                user_list.description,
+                user_list.type,
+                user_list.membership_status,
+                user_list.membership_life_span,
+                user_list.size_for_display,
+                user_list.size_for_search,
+                user_list.eligible_for_display,
+                user_list.eligible_for_search,
+                user_list.match_rate_percentage,
+                user_list.closing_reason
+            FROM user_list
+            WHERE user_list.type != 'UNKNOWN'
+            $typeFilter
+            ORDER BY user_list.size_for_search DESC
+        ");
+
+        $audiences = empty($args['list_type']) ? $this->gaql($customerId, "
+            SELECT
+                audience.id,
+                audience.name,
+                audience.description,
+                audience.status
+            FROM audience
+            WHERE audience.status != 'REMOVED'
+        ") : [];
+
+        return [
+            'user_lists'        => $userLists,
+            'audiences'         => $audiences,
+            'total_user_lists'  => count($userLists),
+        ];
+    }
+
+    public function getAudiencePerformance(array $args): array
+    {
+        $customerId = $args['customer_id'];
+        $dateRange  = $args['date_range'] ?? 'LAST_30_DAYS';
+        $limit      = $args['limit'] ?? 200;
+        $campaignFilter = !empty($args['campaign_id'])
+            ? 'AND campaign.id = ' . $this->numericId($args['campaign_id'])
+            : '';
+
+        $adGroupLevel = $this->gaql($customerId, "
+            SELECT
+                campaign.id,
+                campaign.name,
+                ad_group.id,
+                ad_group.name,
+                ad_group_criterion.criterion_id,
+                ad_group_criterion.display_name,
+                ad_group_criterion.type,
+                metrics.impressions,
+                metrics.clicks,
+                metrics.cost_micros,
+                metrics.conversions,
+                metrics.conversions_value,
+                metrics.ctr,
+                metrics.average_cpc
+            FROM ad_group_audience_view
+            WHERE segments.date DURING $dateRange
+            $campaignFilter
+            ORDER BY metrics.cost_micros DESC
+            LIMIT $limit
+        ");
+
+        $campaignLevel = $this->gaql($customerId, "
+            SELECT
+                campaign.id,
+                campaign.name,
+                campaign_criterion.criterion_id,
+                campaign_criterion.display_name,
+                campaign_criterion.type,
+                metrics.impressions,
+                metrics.clicks,
+                metrics.cost_micros,
+                metrics.conversions,
+                metrics.conversions_value,
+                metrics.ctr,
+                metrics.average_cpc
+            FROM campaign_audience_view
+            WHERE segments.date DURING $dateRange
+            $campaignFilter
+            ORDER BY metrics.cost_micros DESC
+            LIMIT $limit
+        ");
+
+        return [
+            'ad_group_level' => $adGroupLevel,
+            'campaign_level' => $campaignLevel,
+            'total'          => count($adGroupLevel) + count($campaignLevel),
+            'date_range'     => $dateRange,
+        ];
     }
 }
