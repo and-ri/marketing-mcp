@@ -349,6 +349,58 @@ class AuthProvider
         );
 
         $server->registerTool(
+            'auth_set_clarity',
+            <<<DESC
+            Save your Microsoft Clarity Data Export API token. Clarity uses a static
+            project token — there is no browser OAuth flow, so this is a single step.
+
+            ── HOW TO GET THE TOKEN ────────────────────────────────────────────────
+            STEP 1 — Open your project at https://clarity.microsoft.com
+            STEP 2 — Settings → Data Export → Generate new API token
+                     (only project admins can generate tokens)
+            STEP 3 — Give it a name (4–32 chars: letters, digits, - _ .) and copy
+                     the generated token.
+
+            ── PARAMETERS ──────────────────────────────────────────────────────────
+            api_token — the token from Step 3
+            DESC,
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'api_token' => ['type' => 'string', 'description' => 'Clarity Data Export API token (Settings → Data Export → Generate new API token)'],
+                ],
+                'required' => ['api_token'],
+            ],
+            [$this, 'setClarity']
+        );
+
+        $server->registerTool(
+            'auth_set_rybbit',
+            <<<DESC
+            Save your self-hosted Rybbit analytics credentials. Rybbit uses a static
+            API key — there is no browser OAuth flow, so this is a single step.
+
+            ── HOW TO GET THESE ────────────────────────────────────────────────────
+            STEP 1 — base_url: the URL of your self-hosted Rybbit instance,
+                     e.g. https://analytics.example.com (no trailing slash)
+            STEP 2 — api_key: in Rybbit → Settings → Account → API Keys → create a key
+
+            ── PARAMETERS ──────────────────────────────────────────────────────────
+            base_url — your Rybbit instance URL
+            api_key  — API key from Step 2
+            DESC,
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'base_url' => ['type' => 'string', 'description' => 'Self-hosted Rybbit base URL, e.g. https://analytics.example.com (no trailing slash)'],
+                    'api_key'  => ['type' => 'string', 'description' => 'Rybbit API key (Settings → Account → API Keys)'],
+                ],
+                'required' => ['base_url', 'api_key'],
+            ],
+            [$this, 'setRybbit']
+        );
+
+        $server->registerTool(
             'auth_status',
             'Show which platforms are currently authorized for this user, '
             . 'which credentials are missing, and what to do next.',
@@ -686,6 +738,49 @@ class AuthProvider
         ];
     }
 
+    public function setClarity(array $args): array
+    {
+        $token = trim($args['api_token'] ?? '');
+        if ($token === '') {
+            return ['status' => 'error', 'message' => 'api_token is required.'];
+        }
+
+        $this->saveEnv(['CLARITY_API_TOKEN' => $token]);
+
+        return [
+            'status'        => 'success',
+            'message'       => 'Microsoft Clarity credentials saved successfully.',
+            'token_preview' => substr($token, 0, 8) . '…',
+            'what_you_can_do_now' => [
+                'Clarity' => 'Call clarity_get_insights to fetch behavioral analytics (last 1–3 days).',
+            ],
+        ];
+    }
+
+    public function setRybbit(array $args): array
+    {
+        $baseUrl = rtrim(trim($args['base_url'] ?? ''), '/');
+        $apiKey  = trim($args['api_key'] ?? '');
+        if ($baseUrl === '' || $apiKey === '') {
+            return ['status' => 'error', 'message' => 'Both base_url and api_key are required.'];
+        }
+
+        $this->saveEnv([
+            'RYBBIT_BASE_URL' => $baseUrl,
+            'RYBBIT_API_KEY'  => $apiKey,
+        ]);
+
+        return [
+            'status'          => 'success',
+            'message'         => 'Rybbit credentials saved successfully.',
+            'base_url'        => $baseUrl,
+            'api_key_preview' => substr($apiKey, 0, 8) . '…',
+            'what_you_can_do_now' => [
+                'Rybbit' => 'Call rybbit_get_overview with your site_id.',
+            ],
+        ];
+    }
+
     public function status(array $args): array
     {
         $env = $this->freshEnv();
@@ -698,6 +793,8 @@ class AuthProvider
         $hasMetaToken   = !empty($env['META_ACCESS_TOKEN']);
         $hasTikTokApp   = !empty($env['TIKTOK_APP_ID']) && !empty($env['TIKTOK_APP_SECRET']);
         $hasTikTokToken = !empty($env['TIKTOK_ACCESS_TOKEN']);
+        $hasClarity     = !empty($env['CLARITY_API_TOKEN']);
+        $hasRybbit      = !empty($env['RYBBIT_BASE_URL']) && !empty($env['RYBBIT_API_KEY']);
 
         $googleAdsOk = $hasGoogleOAuth && $hasGoogleToken && $hasDevToken;
         $analyticsOk = $hasAnalytics;
@@ -705,10 +802,12 @@ class AuthProvider
         $tikTokOk    = $hasTikTokApp && $hasTikTokToken;
 
         $result = [
-            'google_ads'       => ['status' => $googleAdsOk ? '✓ configured' : '✗ not configured'],
-            'google_analytics' => ['status' => $analyticsOk ? '✓ configured' : '✗ not configured'],
-            'meta_ads'         => ['status' => $metaOk      ? '✓ configured' : '✗ not configured'],
-            'tiktok_ads'       => ['status' => $tikTokOk    ? '✓ configured' : '✗ not configured'],
+            'google_ads'        => ['status' => $googleAdsOk ? '✓ configured' : '✗ not configured'],
+            'google_analytics'  => ['status' => $analyticsOk ? '✓ configured' : '✗ not configured'],
+            'meta_ads'          => ['status' => $metaOk      ? '✓ configured' : '✗ not configured'],
+            'tiktok_ads'        => ['status' => $tikTokOk    ? '✓ configured' : '✗ not configured'],
+            'microsoft_clarity' => ['status' => $hasClarity  ? '✓ configured' : '✗ not configured'],
+            'rybbit'            => ['status' => $hasRybbit   ? '✓ configured' : '✗ not configured'],
         ];
 
         if (!$googleAdsOk || !$analyticsOk) {
@@ -760,8 +859,25 @@ class AuthProvider
                 . 'The tool description contains step-by-step instructions for creating a TikTok developer app.';
         }
 
+        if (!$hasClarity) {
+            $result['microsoft_clarity']['missing']   = ['api_token — generate it in Clarity → Settings → Data Export → Generate new API token'];
+            $result['microsoft_clarity']['next_step'] = 'Call auth_set_clarity with your api_token (optional integration).';
+        }
+
+        if (!$hasRybbit) {
+            $missing = [];
+            if (empty($env['RYBBIT_BASE_URL'])) {
+                $missing[] = 'base_url — the URL of your self-hosted Rybbit instance';
+            }
+            if (empty($env['RYBBIT_API_KEY'])) {
+                $missing[] = 'api_key — create it in Rybbit → Settings → Account → API Keys';
+            }
+            $result['rybbit']['missing']   = $missing;
+            $result['rybbit']['next_step'] = 'Call auth_set_rybbit with your base_url and api_key (optional integration).';
+        }
+
         if ($googleAdsOk && $analyticsOk && $metaOk && $tikTokOk) {
-            $result['summary'] = 'All platforms are configured. '
+            $result['summary'] = 'All core ad platforms are configured. '
                 . 'Use google_ads_list_customers, meta_get_ad_accounts, '
                 . 'and tiktok_get_advertisers to discover account IDs.';
         }

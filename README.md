@@ -117,6 +117,11 @@ The server's OAuth callback endpoint is `https://yourdomain.com/oauth/callback`.
 | `auth_finish_google` | Completes Google auth, saves refresh token |
 | `auth_start_meta` | Starts Meta OAuth2. Tool description contains full setup guide for the Meta developer portal |
 | `auth_finish_meta` | Completes Meta auth, saves long-lived token (~60 days) |
+| `auth_start_tiktok` / `auth_finish_tiktok` | TikTok Ads OAuth2 flow |
+| `auth_set_clarity` | Saves the Microsoft Clarity API token (single step — Clarity has no OAuth) |
+| `auth_set_rybbit` | Saves self-hosted Rybbit `base_url` + `api_key` (single step — Rybbit has no OAuth) |
+
+> **Token-based integrations** (Microsoft Clarity, Rybbit) don't use OAuth — there's no browser step. Just call `auth_set_clarity` / `auth_set_rybbit` with the token(s) and you're done.
 
 ### Google — what you'll need
 
