@@ -16,6 +16,7 @@ require_once __DIR__ . '/src/Providers/GoogleAnalyticsProvider.php';
 require_once __DIR__ . '/src/Providers/MetaAdsProvider.php';
 require_once __DIR__ . '/src/Providers/TikTokAdsProvider.php';
 require_once __DIR__ . '/src/Providers/ClarityProvider.php';
+require_once __DIR__ . '/src/Providers/RybbitProvider.php';
 require_once __DIR__ . '/src/Providers/AuthProvider.php';
 
 set_error_handler(function (int $errno, string $errstr): bool {
@@ -121,6 +122,7 @@ function buildServer(array $env, PDO $db, int $userId, string $baseUrl): McpServ
     (new MetaAdsProvider($env))->registerTools($server);
     (new TikTokAdsProvider($env))->registerTools($server);
     (new ClarityProvider($env))->registerTools($server);
+    (new RybbitProvider($env))->registerTools($server);
     (new AuthProvider($env, $db, $userId, $baseUrl))->registerTools($server);
     return $server;
 }

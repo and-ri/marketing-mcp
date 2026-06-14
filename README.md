@@ -646,6 +646,48 @@ Live insights for the project: traffic, scroll depth, engagement time, dead/rage
 
 ---
 
+## Rybbit tools
+
+Read-only analytics from a **self-hosted** [Rybbit](https://rybbit.com) instance. Set `RYBBIT_BASE_URL` (your instance, no trailing slash) and `RYBBIT_API_KEY` (Settings → Account → API Keys). All tools take a `site_id` plus an optional time range (`start_date`, `end_date`, `time_zone`) and `filters` (JSON-encoded array).
+
+### `rybbit_get_overview`
+
+Top-line metrics: sessions, pageviews, users, pages per session, bounce rate, session duration.
+
+### `rybbit_get_overview_timeseries`
+
+Overview metrics bucketed over time. Adds `bucket` (`minute` \| `five_minutes` \| `hour` \| `day` \| `week` \| `month`, default `day`).
+
+### `rybbit_get_sessions`
+
+Paginated session list with geo, device, browser, source, pages, duration. Adds `page`, `limit`, optional `user_id`.
+
+### `rybbit_get_event_names`
+
+Custom event names with occurrence counts — track conversions and key actions.
+
+### `rybbit_get_performance`
+
+Core Web Vitals (LCP, CLS, INP, FCP, TTFB) at p50/p75/p90/p99. Useful for landing page quality.
+
+### `rybbit_get_errors`
+
+JavaScript errors grouped by name with counts, session counts, and percentages. Adds `page`, `limit`.
+
+### `rybbit_get_goals`
+
+Conversion goals with total conversions, sessions, and conversion rate. Adds `page`, `page_size`.
+
+| Common Parameter | Type | Required | Default |
+|---|---|---|---|
+| `site_id` | string | yes | — |
+| `start_date` | string | no | — ISO date |
+| `end_date` | string | no | — ISO date |
+| `time_zone` | string | no | UTC |
+| `filters` | string | no | — JSON array |
+
+---
+
 ## Common workflows
 
 **"What's my Google Ads performance this month?"**
