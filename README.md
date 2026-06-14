@@ -625,6 +625,27 @@ Ad creative assets: title, body, image URL, CTA type, destination URL.
 
 ---
 
+## Microsoft Clarity tools
+
+Behavioral analytics that complement GA4 — Clarity surfaces UX friction (rage clicks, dead clicks, quickbacks, scroll depth, JS errors) that GA4 doesn't capture. Auth is a static project token (`CLARITY_API_TOKEN`), generated in Clarity → **Settings → Data Export → Generate new API token**. No OAuth flow.
+
+> **Constraints (Clarity API):** data covers only the **last 1–3 days**, max **10 requests per project per day**, response capped at **1000 rows** (no pagination), results in UTC.
+
+### `clarity_get_insights`
+
+Live insights for the project: traffic, scroll depth, engagement time, dead/rage/quickback clicks, excessive scroll, and script errors. Optionally broken down by up to three dimensions.
+
+| Parameter | Type | Required | Default |
+|---|---|---|---|
+| `num_of_days` | integer | no | `1` — `1` \| `2` \| `3` |
+| `dimension1` | string | no | — `Browser` \| `Device` \| `Country/Region` \| `OS` \| `Source` \| `Medium` \| `Campaign` \| `Channel` \| `URL` |
+| `dimension2` | string | no | — second breakdown |
+| `dimension3` | string | no | — third breakdown |
+
+**Returns:** `{ num_of_days, metrics: [{ metricName, information: [...] }] }`
+
+---
+
 ## Common workflows
 
 **"What's my Google Ads performance this month?"**
