@@ -6,15 +6,20 @@ services:
       dockerfile: Dockerfile
     # Always build the image on this host from the local sources; never pull it from a registry
     pull_policy: build
+    container_name: marketing-mcp
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    # No published ports: the reverse proxy (e.g. Nginx Proxy Manager) reaches the
+    # container over the shared "proxy" network at http://marketing-mcp:8080
+    expose:
+      - "8080"
     volumes:
-      - mcp_data:/app/data
+      # MCP_DATA_PATH: host directory for users.sqlite + debug.log (bind mount), e.g. /opt/marketing-mcp/mcp_data.
+      # If unset, the named volume "mcp_data" is used.
+      - ${MCP_DATA_PATH:-mcp_data}:/app/data
     environment:
       MCP_PORT: "8080"
-      MCP_BASE_URL: ""   # set your domain, e.g. https://mcp.example.com
-      DEBUG: "true"      # set to "false" to disable verbose request/response logging to /app/data/debug.log
+      MCP_BASE_URL: ${MCP_BASE_URL:-}   # your public URL, e.g. https://mcp.example.com (used for the OAuth callback)
+      DEBUG: ${DEBUG:-false}            # "true" enables verbose request/response logging to /app/data/debug.log
     healthcheck:
       test: ["CMD", "php", "-r", "exit(file_get_contents('http://localhost:8080/health') === 'OK' ? 0 : 1);"]
       interval: 30s

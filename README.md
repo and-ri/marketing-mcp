@@ -27,9 +27,19 @@ cd marketing-mcp
 docker compose up -d --build
 ```
 
+Configure the stack with environment variables (a `.env` file next to `docker-compose.yml`, or **Environment variables** in Portainer):
+
+| Variable | Example | Purpose |
+|---|---|---|
+| `MCP_BASE_URL` | `https://mcp.example.com` | Public URL, used to build the OAuth callback |
+| `MCP_DATA_PATH` | `/opt/marketing-mcp/mcp_data` | Host directory for `users.sqlite` (bind mount). Unset → named volume `mcp_data` |
+| `DEBUG` | `false` | `true` logs requests/responses to `/app/data/debug.log` |
+
+> Keep `MCP_DATA_PATH` stable across redeploys — that directory holds all users and their saved credentials.
+
 The image is built locally on the host from the cloned sources (`pull_policy: build` in `docker-compose.yml`) — nothing is pulled from a registry except the official `php:8.5-cli` and `composer:2` images. Google APIs are called over REST, so no PHP extensions need to be compiled from source.
 
-The server listens on port **8080**. In Nginx Proxy Manager: add a Proxy Host → forward to `localhost:8080` → enable SSL as usual.
+No port is published on the host. The container joins the external Docker network `proxy` (create it once with `docker network create proxy` and attach Nginx Proxy Manager to it). In Nginx Proxy Manager: add a Proxy Host → scheme `http`, forward hostname `marketing-mcp`, port `8080` → enable SSL as usual.
 
 ### 2 — Create a user
 
