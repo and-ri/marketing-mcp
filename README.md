@@ -669,43 +669,42 @@ Live insights for the project: traffic, scroll depth, engagement time, dead/rage
 
 ## Rybbit tools
 
-Read-only analytics from a **self-hosted** [Rybbit](https://rybbit.com) instance. Set `RYBBIT_BASE_URL` (your instance, no trailing slash) and `RYBBIT_API_KEY` (Settings → Account → API Keys). All tools take a `site_id` plus an optional time range (`start_date`, `end_date`, `time_zone`) and `filters` (JSON-encoded array).
+Analytics from a [Rybbit](https://rybbit.com) instance (self-hosted or cloud). Set `RYBBIT_BASE_URL` (no trailing slash) and `RYBBIT_API_KEY`. Prefer an **Organization API key** — it covers every site in the org. Scoped keys need the matching `resource:read` scopes (`analytics`, `sessions`, `events`, `users`, `goals`, `funnels`, `replay`, `sql`, `org`); a missing scope or wrong `site_id` returns **403**.
 
-### `rybbit_get_overview`
+Start with `rybbit_list_sites` to get `site_id` / `organization_id`. Most tools accept the common params: `start_date` + `end_date` (`YYYY-MM-DD`), `time_zone`, or `past_minutes_start` + `past_minutes_end`, plus `filters` (JSON array of `{parameter, type, value[]}`) and `segment_id`.
 
-Top-line metrics: sessions, pageviews, users, pages per session, bounce rate, session duration.
+| Area | Tools |
+|---|---|
+| Sites | `rybbit_list_sites` |
+| Overview | `rybbit_get_overview`, `rybbit_get_overview_timeseries`, `rybbit_get_live_visitors` |
+| Breakdowns | `rybbit_get_metric` (by channel, referrer, UTM, country, device, entry/exit page…), `rybbit_get_pages`, `rybbit_get_page_trends`, `rybbit_get_session_locations` |
+| Sessions | `rybbit_get_sessions` (`view`: replay / errors / converted / bounced), `rybbit_get_session` (event timeline) |
+| Session replay | `rybbit_list_session_replays`, `rybbit_get_session_replay` |
+| Users | `rybbit_get_users`, `rybbit_get_user` (first-touch acquisition, devices, vitals), `rybbit_get_user_trait_keys` |
+| Events | `rybbit_get_events`, `rybbit_get_event_names`, `rybbit_get_event_properties`, `rybbit_get_event_timeseries`, `rybbit_get_event_counts`, `rybbit_get_outbound_links` |
+| Goals & funnels | `rybbit_get_goals`, `rybbit_get_goal_timeseries`, `rybbit_get_goal_sessions`, `rybbit_get_funnels`, `rybbit_analyze_funnel`, `rybbit_get_funnel_step_sessions` |
+| Behaviour | `rybbit_get_journeys`, `rybbit_get_retention` |
+| Performance & errors | `rybbit_get_performance`, `rybbit_get_performance_by_dimension`, `rybbit_get_errors`, `rybbit_get_error_events` |
+| Bots & AI crawlers | `rybbit_get_bots_overview`, `rybbit_get_bots_by_dimension` (`purpose`: `ai_crawler`, `ai_search`, `ai_agent`…) |
+| Segments & annotations | `rybbit_get_segments`, `rybbit_get_annotations`, `rybbit_create_annotation` (**write**) |
+| Custom SQL | `rybbit_run_sql` — read-only ClickHouse over `scoped_events`, max 1000 rows (needs `sql:read`) |
 
-### `rybbit_get_overview_timeseries`
+### Session replay analysis
 
-Overview metrics bucketed over time. Adds `bucket` (`minute` \| `five_minutes` \| `hour` \| `day` \| `week` \| `month`, default `day`).
+`rybbit_get_session_replay` does not dump raw rrweb data (thousands of DOM/mouse events). It decodes the recording into a compact timeline:
 
-### `rybbit_get_sessions`
+- page navigations and max scroll depth per page;
+- clicks/taps resolved to the clicked element (`tag`, visible text, `href`, `id`/`class`), climbing to the nearest button/link;
+- **rage clicks** (≥3 clicks within 1 s inside 40 px);
+- form fields the visitor interacted with — **values are never returned**;
+- viewport resizes and console errors.
 
-Paginated session list with geo, device, browser, source, pages, duration. Adds `page`, `limit`, optional `user_id`.
+Pass `include_raw: true` to also get the first `raw_limit` raw events.
 
-### `rybbit_get_event_names`
-
-Custom event names with occurrence counts — track conversions and key actions.
-
-### `rybbit_get_performance`
-
-Core Web Vitals (LCP, CLS, INP, FCP, TTFB) at p50/p75/p90/p99. Useful for landing page quality.
-
-### `rybbit_get_errors`
-
-JavaScript errors grouped by name with counts, session counts, and percentages. Adds `page`, `limit`.
-
-### `rybbit_get_goals`
-
-Conversion goals with total conversions, sessions, and conversion rate. Adds `page`, `page_size`.
-
-| Common Parameter | Type | Required | Default |
-|---|---|---|---|
-| `site_id` | string | yes | — |
-| `start_date` | string | no | — ISO date |
-| `end_date` | string | no | — ISO date |
-| `time_zone` | string | no | UTC |
-| `filters` | string | no | — JSON array |
+**Workflow — "why do people drop off at checkout?"**
+1. `rybbit_analyze_funnel` with steps `/product/**` → `/cart` → `/checkout`
+2. `rybbit_get_funnel_step_sessions` with `mode: dropped`, `replays_only: true`
+3. `rybbit_get_session_replay` for a few of those sessions
 
 ---
 

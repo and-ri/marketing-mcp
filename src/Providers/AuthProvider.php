@@ -386,7 +386,11 @@ class AuthProvider
             ── HOW TO GET THESE ────────────────────────────────────────────────────
             STEP 1 — base_url: the URL of your self-hosted Rybbit instance,
                      e.g. https://analytics.example.com (no trailing slash)
-            STEP 2 — api_key: in Rybbit → Settings → Account → API Keys → create a key
+            STEP 2 — api_key: in Rybbit → Settings → API Keys → create an
+                     ORGANIZATION key (covers all sites). If you restrict scopes,
+                     grant read on: analytics, sessions, events, users, goals,
+                     funnels, replay, segments, annotations, org (and sql for
+                     rybbit_run_sql). A key without access returns 403.
 
             ── PARAMETERS ──────────────────────────────────────────────────────────
             base_url — your Rybbit instance URL
