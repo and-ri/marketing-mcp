@@ -166,6 +166,15 @@ Every platform tool is available in local mode. The `auth_*` tools exist only in
 
 ---
 
+## Tests
+
+```bash
+composer install && composer test     # local PHP
+docker build --target test .          # same suite inside the production runtime
+```
+
+Unit tests cover the providers against faked APIs, the replay analyzer, tool schemas and the entry points. The integration test boots `server.php` on a free port and speaks MCP to it over HTTP. Run the Docker target after changing the Dockerfile or dependencies; it catches missing PHP extensions that your local PHP may already have.
+
 ## Project layout
 
 ```text
@@ -175,6 +184,7 @@ users.php               user management CLI
 src/McpServer.php       JSON-RPC / MCP protocol
 src/Providers/*.php     one provider per platform; each registers its tools
 docs/TOOLS.md           tools reference
+tests/                  PHPUnit: Unit/ (faked APIs) and Integration/ (live HTTP server)
 ```
 
 To add a platform, write a provider with `registerTools(McpServer $server)`, then register it in `server.php` and `app.php`.

@@ -4,6 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: app
     # Always build the image on this host from the local sources; never pull it from a registry
     pull_policy: build
     container_name: marketing-mcp

@@ -45,7 +45,7 @@ class SearchConsoleProvider
         return $this->accessToken = $token['access_token'];
     }
 
-    private function request(string $method, string $url, ?array $body = null): array
+    protected function request(string $method, string $url, ?array $body = null): array
     {
         $ch = curl_init($url);
         $opts = [

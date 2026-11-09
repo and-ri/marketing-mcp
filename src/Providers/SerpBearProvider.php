@@ -36,7 +36,7 @@ class SerpBearProvider
         return $key;
     }
 
-    private function request(string $method, string $path, array $query = []): array
+    protected function request(string $method, string $path, array $query = []): array
     {
         $url = $this->baseUrl() . $path;
         if ($query) {

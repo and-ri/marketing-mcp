@@ -50,7 +50,28 @@ class GoogleAdsProvider
         return $id;
     }
 
+    /**
+     * Runs a GAQL query. Translates the "metrics requested for a manager (MCC) account" error
+     * into an actionable message that lists the client accounts to query instead.
+     */
     private function gaql(string $customerId, string $query): array
+    {
+        try {
+            return $this->searchStream($customerId, $query);
+        } catch (\Throwable $e) {
+            if (str_contains($e->getMessage(), 'REQUESTED_METRICS_FOR_MANAGER')) {
+                throw new \RuntimeException(
+                    "Account $customerId is a manager (MCC) account — Google Ads does not report metrics for managers. "
+                    . 'Query one of its client accounts instead: '
+                    . json_encode($this->clientAccounts($customerId), JSON_UNESCAPED_UNICODE)
+                );
+            }
+            throw $e;
+        }
+    }
+
+    /** Raw GAQL search-stream call. Protected so tests can substitute the API. */
+    protected function searchStream(string $customerId, string $query): array
     {
         $request = new SearchGoogleAdsStreamRequest([
             'customer_id' => $customerId,
@@ -67,11 +88,46 @@ class GoogleAdsProvider
         return $rows;
     }
 
+    /** IDs of accounts the OAuth user can access directly. Protected so tests can substitute the API. */
+    protected function accessibleCustomerIds(): array
+    {
+        $response = $this->client()->getCustomerServiceClient()
+            ->listAccessibleCustomers(new ListAccessibleCustomersRequest());
+        $ids = [];
+        foreach ($response->getResourceNames() as $name) {
+            $ids[] = str_replace('customers/', '', $name);
+        }
+        return $ids;
+    }
+
+    /** Direct (level 1) client accounts of a manager account; [] on failure. */
+    private function clientAccounts(string $managerId): array
+    {
+        try {
+            $rows = $this->searchStream($managerId, "
+                SELECT customer_client.id, customer_client.descriptive_name, customer_client.manager,
+                       customer_client.status, customer_client.currency_code, customer_client.level
+                FROM customer_client
+                WHERE customer_client.level = 1
+            ");
+        } catch (\Throwable) {
+            return [];
+        }
+        return array_map(fn($r) => [
+            'customer_id' => (string) ($r['customerClient']['id'] ?? ''),
+            'name'        => $r['customerClient']['descriptiveName'] ?? null,
+            'manager'     => (bool) ($r['customerClient']['manager'] ?? false),
+            'status'      => $r['customerClient']['status'] ?? null,
+            'currency'    => $r['customerClient']['currencyCode'] ?? null,
+        ], $rows);
+    }
+
     public function registerTools(McpServer $server): void
     {
         $server->registerTool(
             'google_ads_list_customers',
-            'List all accessible Google Ads customer accounts (accounts you can manage).',
+            'List accessible Google Ads accounts with name, currency, time zone and whether each is a manager (MCC). '
+            . 'For manager accounts, also lists their client accounts — metrics can only be requested for client (non-manager) accounts.',
             [
                 'type'       => 'object',
                 'properties' => new stdClass(),
@@ -329,11 +385,30 @@ class GoogleAdsProvider
 
     public function listCustomers(array $args): array
     {
-        $service = $this->client()->getCustomerServiceClient();
-        $response = $service->listAccessibleCustomers(new ListAccessibleCustomersRequest());
         $result = [];
-        foreach ($response->getResourceNames() as $name) {
-            $result[] = ['resource_name' => $name, 'customer_id' => str_replace('customers/', '', $name)];
+        foreach ($this->accessibleCustomerIds() as $id) {
+            $entry = ['customer_id' => $id, 'resource_name' => "customers/$id"];
+            try {
+                $row = $this->searchStream($id, "
+                    SELECT customer.id, customer.descriptive_name, customer.manager,
+                           customer.currency_code, customer.time_zone, customer.status
+                    FROM customer LIMIT 1
+                ")[0]['customer'] ?? [];
+                $entry += [
+                    'name'      => $row['descriptiveName'] ?? null,
+                    'manager'   => (bool) ($row['manager'] ?? false),
+                    'currency'  => $row['currencyCode'] ?? null,
+                    'time_zone' => $row['timeZone'] ?? null,
+                    'status'    => $row['status'] ?? null,
+                ];
+                if ($entry['manager']) {
+                    $entry['client_accounts'] = $this->clientAccounts($id);
+                    $entry['note'] = 'Manager (MCC) account: metrics are only available for its client accounts.';
+                }
+            } catch (\Throwable $e) {
+                $entry['details_error'] = substr($e->getMessage(), 0, 300);
+            }
+            $result[] = $entry;
         }
         return ['customers' => $result, 'total' => count($result)];
     }

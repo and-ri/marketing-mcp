@@ -40,7 +40,7 @@ class RybbitProvider
         return $key;
     }
 
-    private function request(string $method, string $path, array $query = [], ?array $body = null): array
+    protected function request(string $method, string $path, array $query = [], ?array $body = null): array
     {
         $url = $this->baseUrl() . $path;
         $query = array_filter($query, fn($v) => $v !== null && $v !== '');

@@ -19,7 +19,7 @@ declare(strict_types=1);
 
 function openDb(): PDO
 {
-    $path = __DIR__ . '/data/users.sqlite';
+    $path = (getenv('MCP_DATA_DIR') ?: __DIR__ . '/data') . '/users.sqlite';
     if (!is_dir(dirname($path))) {
         mkdir(dirname($path), 0755, true);
     }

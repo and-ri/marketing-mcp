@@ -5,3 +5,6 @@ data/
 .github/
 .claude/
 *.md
+
+!docs/TOOLS.md
+.phpunit.result.cache

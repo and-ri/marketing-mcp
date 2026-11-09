@@ -1,10 +1,21 @@
 {
     "require": {
+        "php": ">=8.2",
+        "ext-bcmath": "*",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "ext-pdo_sqlite": "*",
         "vlucas/phpdotenv": "^5.6",
         "googleads/google-ads-php": "^33.3",
         "facebook/php-business-sdk": "^25.0",
         "google/analytics-data": "^0.23.3",
         "react/http": "^1.10",
         "react/socket": "^1.16"
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^13.4"
     }
 }

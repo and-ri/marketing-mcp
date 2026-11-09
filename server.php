@@ -43,7 +43,7 @@ function debugLog(string $level, string $msg): void
 
     $ts   = date('Y-m-d H:i:s');
     $line = "[$ts] [$level] $msg\n";
-    $file = __DIR__ . '/data/debug.log';
+    $file = (getenv('MCP_DATA_DIR') ?: __DIR__ . '/data') . '/debug.log';
 
     // Rotate log at 10 MB
     if (file_exists($file) && filesize($file) > 10 * 1024 * 1024) {
@@ -57,7 +57,7 @@ function debugLog(string $level, string $msg): void
 
 function openDb(): PDO
 {
-    $path = __DIR__ . '/data/users.sqlite';
+    $path = (getenv('MCP_DATA_DIR') ?: __DIR__ . '/data') . '/users.sqlite';
     if (!is_dir(dirname($path))) {
         mkdir(dirname($path), 0755, true);
     }

@@ -27,7 +27,7 @@ class BingWebmasterProvider
         return $key;
     }
 
-    private function get(string $method, array $query = []): mixed
+    protected function get(string $method, array $query = []): mixed
     {
         $url = self::BASE . $method . '?' . http_build_query(['apikey' => $this->apiKey()] + $query);
 
