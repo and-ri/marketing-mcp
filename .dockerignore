@@ -5,4 +5,3 @@ data/
 .github/
 .claude/
 *.md
-Dockerfile.base

@@ -24,8 +24,10 @@ The HTTP mode lets multiple users connect from any device using their own API cr
 ```bash
 git clone https://github.com/and-ri/marketing-mcp.git
 cd marketing-mcp
-docker compose up -d
+docker compose up -d --build
 ```
+
+The image is built locally on the host from the cloned sources (`pull_policy: build` in `docker-compose.yml`) — nothing is pulled from a registry except the official `php:8.5-cli` and `composer:2` images. The first build compiles the gRPC extension and takes several minutes; later builds reuse the Docker layer cache.
 
 The server listens on port **8080**. In Nginx Proxy Manager: add a Proxy Host → forward to `localhost:8080` → enable SSL as usual.
 
@@ -65,7 +67,7 @@ See [Authorizing platforms from Claude](#authorizing-platforms-from-claude) for 
 
 ```bash
 docker compose logs -f mcp                  # live logs
-docker compose up -d --build mcp            # rebuild after code changes
+git pull && docker compose up -d --build   # update: pull sources and rebuild the image
 docker compose exec mcp php users.php list  # list all users
 ```
 
@@ -120,15 +122,19 @@ The server's OAuth callback endpoint is `https://yourdomain.com/oauth/callback`.
 | `auth_start_tiktok` / `auth_finish_tiktok` | TikTok Ads OAuth2 flow |
 | `auth_set_clarity` | Saves the Microsoft Clarity API token (single step — Clarity has no OAuth) |
 | `auth_set_rybbit` | Saves self-hosted Rybbit `base_url` + `api_key` (single step — Rybbit has no OAuth) |
+| `auth_set_bing_webmaster` | Saves the Bing Webmaster Tools API key (single step) |
+| `auth_set_serpbear` | Saves self-hosted SerpBear `base_url` + `api_key` (single step) |
 
-> **Token-based integrations** (Microsoft Clarity, Rybbit) don't use OAuth — there's no browser step. Just call `auth_set_clarity` / `auth_set_rybbit` with the token(s) and you're done.
+> **Token-based integrations** (Microsoft Clarity, Rybbit, Bing Webmaster, SerpBear) don't use OAuth — there's no browser step. Just call the matching `auth_set_*` tool with the token(s) and you're done.
+>
+> **Google Search Console** shares the Google OAuth token with Ads and GA4 (scope `webmasters.readonly`). If you authorized Google before Search Console support was added, re-run `auth_start_google` + `auth_finish_google` once.
 
 ### Google — what you'll need
 
 Before calling `auth_start_google`:
 
 1. **Google Cloud project** — [console.cloud.google.com](https://console.cloud.google.com)
-2. **APIs enabled** — Google Ads API + Google Analytics Data API
+2. **APIs enabled** — Google Ads API + Google Analytics Data API + Google Search Console API
 3. **OAuth client** — type: *Web application*, redirect URI: `https://yourdomain.com/oauth/callback`
 4. **Developer token** — [ads.google.com/aw/apicenter](https://ads.google.com/aw/apicenter)
 
@@ -690,6 +696,74 @@ Conversion goals with total conversions, sessions, and conversion rate. Adds `pa
 | `end_date` | string | no | — ISO date |
 | `time_zone` | string | no | UTC |
 | `filters` | string | no | — JSON array |
+
+---
+
+## Google Search Console tools
+
+Organic Google search data. Uses the same Google OAuth token as Ads/GA4 (scope `https://www.googleapis.com/auth/webmasters.readonly`). `site_url` is the property exactly as returned by `gsc_list_sites`: `https://example.com/` (URL-prefix) or `sc-domain:example.com` (domain property).
+
+### `gsc_list_sites`
+
+Properties available to the account, with permission level.
+
+### `gsc_search_analytics`
+
+Clicks, impressions, CTR (percent) and average position.
+
+| Parameter | Type | Required | Default |
+|---|---|---|---|
+| `site_url` | string | yes | — |
+| `start_date` / `end_date` | string | yes | — `YYYY-MM-DD` |
+| `dimensions` | array | no | `["query"]` — `query` \| `page` \| `country` \| `device` \| `date` \| `searchAppearance` |
+| `search_type` | string | no | `web` — `image` \| `video` \| `news` \| `discover` \| `googleNews` |
+| `filters` | array | no | — `[{dimension, operator, expression}]`, AND-combined |
+| `row_limit` | integer | no | `1000` (max 25000) |
+| `start_row` | integer | no | `0` |
+| `data_state` | string | no | `final` — `all` includes fresh data |
+
+### `gsc_list_sitemaps`
+
+Submitted sitemaps with last submitted/downloaded dates, warnings, errors and indexed counts.
+
+### `gsc_inspect_url`
+
+URL Inspection API: index status, coverage, last crawl, Google canonical, mobile usability, rich results. Params: `site_url`, `inspection_url`, `language_code` (default `en-US`). Quota ~2000/day per property.
+
+---
+
+## Bing Webmaster tools
+
+Bing organic search data (also covers Yahoo/DuckDuckGo syndication). Auth is a static API key (`BING_WEBMASTER_API_KEY`) from Bing Webmaster Tools → **Settings → API access → API Key**. Bing returns full history; the stats tools filter client-side by optional `start_date` / `end_date` and sort by impressions with a `limit` (default 100, `0` = all). `site_url` is as listed by `bing_list_sites`.
+
+| Tool | What it returns |
+|---|---|
+| `bing_list_sites` | Verified sites |
+| `bing_get_traffic_stats` | Daily impressions and clicks |
+| `bing_get_query_stats` | Top queries: impressions, clicks, avg click/impression position (weekly rows) |
+| `bing_get_page_stats` | Top pages with the same metrics |
+| `bing_get_query_page_stats` | Pages ranking for one `query` |
+| `bing_get_page_query_stats` | Queries driving traffic to one `page` |
+| `bing_get_crawl_stats` | Daily crawl: crawled pages, errors, in-index, blocked by robots.txt, HTTP codes |
+| `bing_get_crawl_issues` | URLs with crawl issues |
+| `bing_get_link_counts` | Inbound link counts per page (`page` index, from 0) |
+| `bing_get_url_info` | Index details for one `url` |
+| `bing_get_sitemaps` | Submitted sitemaps/feeds and their status |
+| `bing_get_keyword_stats` | Keyword research: weekly Bing impressions for `query` in `country` / `language` |
+| `bing_get_url_submission_quota` | Remaining daily/monthly URL submission quota |
+
+---
+
+## SerpBear tools
+
+Keyword rank tracking from a **self-hosted** [SerpBear](https://docs.serpbear.com) instance. Set `SERPBEAR_BASE_URL` (no trailing slash) and `SERPBEAR_API_KEY` (the `APIKEY` value from SerpBear's `.env`). Keyword responses drop the heavy raw SERP snapshot (`lastResult`) and trim `history` to the last 30 days by default — override with `include_serp_result: true` / `history_days: 0`.
+
+| Tool | What it does |
+|---|---|
+| `serpbear_get_domains` | Tracked domains with keyword counts and last update |
+| `serpbear_get_keywords` | All keywords for a `domain`: position, ranking URL, device, country, tags, history. Optional `tag`, `device` filters |
+| `serpbear_get_keyword` | One keyword by `id` |
+| `serpbear_refresh_keywords` | Re-scrape positions now for keyword `ids` (uses scraper credits) |
 
 ---
 

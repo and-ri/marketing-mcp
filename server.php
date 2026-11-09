@@ -17,6 +17,9 @@ require_once __DIR__ . '/src/Providers/MetaAdsProvider.php';
 require_once __DIR__ . '/src/Providers/TikTokAdsProvider.php';
 require_once __DIR__ . '/src/Providers/ClarityProvider.php';
 require_once __DIR__ . '/src/Providers/RybbitProvider.php';
+require_once __DIR__ . '/src/Providers/SearchConsoleProvider.php';
+require_once __DIR__ . '/src/Providers/BingWebmasterProvider.php';
+require_once __DIR__ . '/src/Providers/SerpBearProvider.php';
 require_once __DIR__ . '/src/Providers/AuthProvider.php';
 
 set_error_handler(function (int $errno, string $errstr): bool {
@@ -123,6 +126,9 @@ function buildServer(array $env, PDO $db, int $userId, string $baseUrl): McpServ
     (new TikTokAdsProvider($env))->registerTools($server);
     (new ClarityProvider($env))->registerTools($server);
     (new RybbitProvider($env))->registerTools($server);
+    (new SearchConsoleProvider($env))->registerTools($server);
+    (new BingWebmasterProvider($env))->registerTools($server);
+    (new SerpBearProvider($env))->registerTools($server);
     (new AuthProvider($env, $db, $userId, $baseUrl))->registerTools($server);
     return $server;
 }

@@ -106,7 +106,8 @@ class AuthProvider
         $server->registerTool(
             'auth_start_google',
             <<<DESC
-            Start Google OAuth2 authorization for Google Ads + Google Analytics 4.
+            Start Google OAuth2 authorization for Google Ads + Google Analytics 4 +
+            Google Search Console (one OAuth client and refresh token for all three).
             Returns a URL the user must open in their browser. After completing the
             browser sign-in, call auth_finish_google to save the credentials.
 
@@ -121,6 +122,7 @@ class AuthProvider
             ● APIs & Services → Library
             ● Search "Google Ads API" → click Enable
             ● Search "Google Analytics Data API" → click Enable
+            ● Search "Google Search Console API" → click Enable
 
             STEP 3 — OAuth consent screen (one-time setup)
             ● APIs & Services → OAuth consent screen
@@ -129,6 +131,7 @@ class AuthProvider
             ● Scopes page: click "Add or remove scopes" and add:
                 https://www.googleapis.com/auth/adwords
                 https://www.googleapis.com/auth/analytics.readonly
+                https://www.googleapis.com/auth/webmasters.readonly
             ● Test users: add your own Google account email address
             ● Publishing status can stay "Testing" for personal use
 
@@ -401,6 +404,60 @@ class AuthProvider
         );
 
         $server->registerTool(
+            'auth_set_bing_webmaster',
+            <<<DESC
+            Save your Bing Webmaster Tools API key. Bing uses a static API key —
+            there is no browser OAuth flow, so this is a single step.
+
+            ── HOW TO GET THE KEY ──────────────────────────────────────────────────
+            STEP 1 — Open https://www.bing.com/webmasters and sign in
+                     (your site must already be verified there; you can import
+                     sites from Google Search Console in one click)
+            STEP 2 — Click the gear icon (Settings) → API access
+            STEP 3 — Click "API Key" → Generate → copy the key
+                     (one key per user, it covers all your verified sites)
+
+            ── PARAMETERS ──────────────────────────────────────────────────────────
+            api_key — the key from Step 3
+            DESC,
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'api_key' => ['type' => 'string', 'description' => 'Bing Webmaster Tools API key (Settings → API access → API Key)'],
+                ],
+                'required' => ['api_key'],
+            ],
+            [$this, 'setBingWebmaster']
+        );
+
+        $server->registerTool(
+            'auth_set_serpbear',
+            <<<DESC
+            Save your self-hosted SerpBear (keyword rank tracker) credentials.
+            SerpBear uses a static API key — no browser OAuth flow.
+
+            ── HOW TO GET THESE ────────────────────────────────────────────────────
+            STEP 1 — base_url: the URL of your SerpBear instance,
+                     e.g. https://serpbear.example.com (no trailing slash)
+            STEP 2 — api_key: the APIKEY value from the SerpBear .env file /
+                     docker-compose environment (you set it yourself when deploying)
+
+            ── PARAMETERS ──────────────────────────────────────────────────────────
+            base_url — your SerpBear instance URL
+            api_key  — APIKEY from the SerpBear .env
+            DESC,
+            [
+                'type'       => 'object',
+                'properties' => [
+                    'base_url' => ['type' => 'string', 'description' => 'SerpBear base URL, e.g. https://serpbear.example.com (no trailing slash)'],
+                    'api_key'  => ['type' => 'string', 'description' => 'APIKEY value from the SerpBear .env'],
+                ],
+                'required' => ['base_url', 'api_key'],
+            ],
+            [$this, 'setSerpBear']
+        );
+
+        $server->registerTool(
             'auth_status',
             'Show which platforms are currently authorized for this user, '
             . 'which credentials are missing, and what to do next.',
@@ -442,6 +499,7 @@ class AuthProvider
             'scope'              => implode(' ', [
                 'https://www.googleapis.com/auth/adwords',
                 'https://www.googleapis.com/auth/analytics.readonly',
+                'https://www.googleapis.com/auth/webmasters.readonly',
             ]),
             'state' => $state,
         ]);
@@ -513,10 +571,11 @@ class AuthProvider
 
         return [
             'status'   => 'success',
-            'message'  => 'Google Ads and Analytics credentials saved successfully.',
+            'message'  => 'Google Ads, Analytics and Search Console credentials saved successfully.',
             'what_you_can_do_now' => [
-                'Google Ads' => 'Call google_ads_list_customers to see your ad accounts.',
-                'Analytics'  => 'Call ga4_get_audience_overview with your GA4 property_id.',
+                'Google Ads'     => 'Call google_ads_list_customers to see your ad accounts.',
+                'Analytics'      => 'Call ga4_get_audience_overview with your GA4 property_id.',
+                'Search Console' => 'Call gsc_list_sites to see your Search Console properties.',
             ],
             'refresh_token_preview' => substr($tokens['refresh_token'], 0, 12) . '…',
         ];
@@ -781,6 +840,49 @@ class AuthProvider
         ];
     }
 
+    public function setBingWebmaster(array $args): array
+    {
+        $key = trim($args['api_key'] ?? '');
+        if ($key === '') {
+            return ['status' => 'error', 'message' => 'api_key is required.'];
+        }
+
+        $this->saveEnv(['BING_WEBMASTER_API_KEY' => $key]);
+
+        return [
+            'status'          => 'success',
+            'message'         => 'Bing Webmaster Tools credentials saved successfully.',
+            'api_key_preview' => substr($key, 0, 6) . '…',
+            'what_you_can_do_now' => [
+                'Bing Webmaster' => 'Call bing_list_sites to see your verified sites.',
+            ],
+        ];
+    }
+
+    public function setSerpBear(array $args): array
+    {
+        $baseUrl = rtrim(trim($args['base_url'] ?? ''), '/');
+        $apiKey  = trim($args['api_key'] ?? '');
+        if ($baseUrl === '' || $apiKey === '') {
+            return ['status' => 'error', 'message' => 'Both base_url and api_key are required.'];
+        }
+
+        $this->saveEnv([
+            'SERPBEAR_BASE_URL' => $baseUrl,
+            'SERPBEAR_API_KEY'  => $apiKey,
+        ]);
+
+        return [
+            'status'          => 'success',
+            'message'         => 'SerpBear credentials saved successfully.',
+            'base_url'        => $baseUrl,
+            'api_key_preview' => substr($apiKey, 0, 6) . '…',
+            'what_you_can_do_now' => [
+                'SerpBear' => 'Call serpbear_get_domains to see tracked domains.',
+            ],
+        ];
+    }
+
     public function status(array $args): array
     {
         $env = $this->freshEnv();
@@ -795,6 +897,8 @@ class AuthProvider
         $hasTikTokToken = !empty($env['TIKTOK_ACCESS_TOKEN']);
         $hasClarity     = !empty($env['CLARITY_API_TOKEN']);
         $hasRybbit      = !empty($env['RYBBIT_BASE_URL']) && !empty($env['RYBBIT_API_KEY']);
+        $hasBing        = !empty($env['BING_WEBMASTER_API_KEY']);
+        $hasSerpBear    = !empty($env['SERPBEAR_BASE_URL']) && !empty($env['SERPBEAR_API_KEY']);
 
         $googleAdsOk = $hasGoogleOAuth && $hasGoogleToken && $hasDevToken;
         $analyticsOk = $hasAnalytics;
@@ -808,7 +912,31 @@ class AuthProvider
             'tiktok_ads'        => ['status' => $tikTokOk    ? '✓ configured' : '✗ not configured'],
             'microsoft_clarity' => ['status' => $hasClarity  ? '✓ configured' : '✗ not configured'],
             'rybbit'            => ['status' => $hasRybbit   ? '✓ configured' : '✗ not configured'],
+            'google_search_console' => [
+                'status' => $analyticsOk ? '✓ configured' : '✗ not configured',
+                'note'   => 'Uses the Google OAuth token. If gsc_* tools return an insufficient-scope error, '
+                    . 'the token predates Search Console support — re-run auth_start_google + auth_finish_google.',
+            ],
+            'bing_webmaster'    => ['status' => $hasBing     ? '✓ configured' : '✗ not configured'],
+            'serpbear'          => ['status' => $hasSerpBear ? '✓ configured' : '✗ not configured'],
         ];
+
+        if (!$hasBing) {
+            $result['bing_webmaster']['missing']   = ['api_key — Bing Webmaster Tools → Settings → API access → API Key'];
+            $result['bing_webmaster']['next_step'] = 'Call auth_set_bing_webmaster with your api_key (optional integration).';
+        }
+
+        if (!$hasSerpBear) {
+            $missing = [];
+            if (empty($env['SERPBEAR_BASE_URL'])) {
+                $missing[] = 'base_url — the URL of your SerpBear instance';
+            }
+            if (empty($env['SERPBEAR_API_KEY'])) {
+                $missing[] = 'api_key — the APIKEY value from the SerpBear .env';
+            }
+            $result['serpbear']['missing']   = $missing;
+            $result['serpbear']['next_step'] = 'Call auth_set_serpbear with your base_url and api_key (optional integration).';
+        }
 
         if (!$googleAdsOk || !$analyticsOk) {
             $missing = [];

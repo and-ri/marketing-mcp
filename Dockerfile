@@ -1,4 +1,16 @@
-FROM ghcr.io/and-ri/marketing-mcp-base:php8.2
+FROM php:8.5-cli
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        unzip \
+        libsqlite3-dev \
+        libssl-dev \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN docker-php-ext-install pdo pdo_sqlite
+
+# gRPC is compiled from source — slow on the first build, then cached by Docker
+RUN pecl install grpc && docker-php-ext-enable grpc
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 

@@ -1,8 +1,11 @@
 services:
   mcp:
-    image: ghcr.io/and-ri/marketing-mcp:latest
-    # To build locally instead: comment the line above and uncomment below
-    # build: .
+    image: marketing-mcp:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Always build the image on this host from the local sources; never pull it from a registry
+    pull_policy: build
     restart: unless-stopped
     ports:
       - "8080:8080"
