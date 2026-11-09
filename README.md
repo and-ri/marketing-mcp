@@ -1,25 +1,62 @@
 # marketing-mcp
 
-MCP server that exposes Google Ads, Google Analytics 4, and Meta Ads as tools for LLMs.
-Built in PHP. Supports two transport modes: **stdio** (local, single user) and **HTTP** (Docker, multi-user).
+**Your whole marketing stack, available to Claude.** One self-hosted [MCP](https://modelcontextprotocol.io) server connects Claude to your ad accounts, analytics, search consoles and session replays, so you can ask questions in plain language instead of exporting CSVs from nine dashboards.
+
+```text
+You:     Why did Google Ads conversions on example.com drop last week?
+
+Claude:  Spend held steady but conversions fell, and almost all of the drop is
+         on mobile. Rybbit shows bounce on /checkout rising since Tuesday.
+         Replays of paid sessions show rage clicks on the "Place order" button,
+         followed by a console error: "TypeError: payment is undefined"…
+```
+
+<sub>Illustrative example.</sub>
+
+113 tools · 9 platforms · multi-user · OAuth from the chat · read-only by design
 
 ---
 
-## Table of contents
+## Platforms
 
-- [Server setup (Docker + HTTP)](#server-setup-docker--http)
-- [Local setup (stdio)](#local-setup-stdio)
-- [Authorizing platforms from Claude](#authorizing-platforms-from-claude)
-- [User management CLI](#user-management-cli)
-- [Tools reference](#tools-reference)
+| | Platform | Tools | What Claude can see |
+|---|---|---:|---|
+| 📣 | **Google Ads** | 17 | Campaigns, keywords with QS, search terms, RSA/PMax asset labels, audiences, negatives, change history, any GAQL |
+| 📣 | **Meta Ads** | 10 | Campaigns → ads, creatives, breakdowns, attribution windows, audience size estimates, pixels |
+| 📣 | **TikTok Ads** | 5 | Advertisers, campaigns, ad groups, ads, performance reports |
+| 📊 | **Google Analytics 4** | 9 | Traffic sources, top pages, conversions, e-commerce, geo/device, custom and realtime reports |
+| 🔍 | **Google Search Console** | 4 | Queries and pages with CTR and position, sitemaps, URL inspection |
+| 🔍 | **Bing Webmaster Tools** | 13 | Bing queries and pages, crawl stats and issues, backlinks, keyword research |
+| 🔍 | **SerpBear** | 4 | Daily keyword positions from your self-hosted rank tracker |
+| 🖱️ | **Microsoft Clarity** | 1 | Rage/dead clicks, quickbacks, scroll depth, JS errors |
+| 🖱️ | **Rybbit** | 39 | Sessions, **session replays**, funnels, journeys, retention, Web Vitals, errors, **AI crawlers**, custom SQL |
+
+Full list with parameters: **[docs/TOOLS.md](docs/TOOLS.md)**.
+
+## What to ask
+
+- *"Which search terms spent over ₴500 last month without a single conversion? Draft a negative keyword list."*
+- *"Compare ROAS across Google Ads, Meta and TikTok for October and tell me where to move budget."*
+- *"Which pages lost Google clicks this month, and did their SerpBear positions drop too?"*
+- *"Find funnel drop-offs between cart and checkout and watch five of those session replays. What do people struggle with?"*
+- *"Which AI crawlers (GPTBot, ClaudeBot, PerplexityBot) read my site, and which pages do they read?"*
+- *"Which RSA headlines are rated LOW? Suggest replacements in the tone of the BEST ones."*
+- *"Are there queries where we rank well on Bing but badly on Google?"*
+
+## Highlights
+
+- **Session replays Claude can actually read.** A raw replay is thousands of rrweb events. `rybbit_get_session_replay` turns one into a timeline: pages, scroll depth, clicks resolved to the clicked button or link, rage clicks, form fields touched, console errors. Typed values are never returned.
+- **One Google sign-in** covers Ads, GA4 and Search Console.
+- **Authorize from the chat.** Ask Claude to *"connect Google Ads"*. It reads the setup guide built into the tool, gives you the OAuth link, and saves the token. You never need a shell on the server.
+- **Multi-user.** Every user gets their own token and their own stored credentials.
+- **Read-only.** Nothing touches your campaigns, budgets or bids. There are two exceptions, and both run only when you ask: `rybbit_create_annotation` adds a note to the Rybbit timeline, and `serpbear_refresh_keywords` triggers a rank re-check.
+- **Lightweight.** PHP 8.5 + ReactPHP, a single container, SQLite. Google APIs go over REST, so there are no native extensions to compile.
 
 ---
 
-## Server setup (Docker + HTTP)
+## Quick start (Docker)
 
-The HTTP mode lets multiple users connect from any device using their own API credentials. SSL is handled by Nginx Proxy Manager or any other reverse proxy.
-
-### 1 — Start the container
+### 1. Run the server
 
 ```bash
 git clone https://github.com/and-ri/marketing-mcp.git
@@ -27,31 +64,37 @@ cd marketing-mcp
 docker compose up -d --build
 ```
 
-Configure the stack with environment variables (a `.env` file next to `docker-compose.yml`, or **Environment variables** in Portainer):
+Configure the stack with these environment variables, either in a `.env` file next to `docker-compose.yml` or under **Environment variables** in Portainer. Platform credentials don't go here; each user adds their own from the chat (step 4).
 
 | Variable | Example | Purpose |
 |---|---|---|
-| `MCP_BASE_URL` | `https://mcp.example.com` | Public URL, used to build the OAuth callback |
-| `MCP_DATA_PATH` | `/opt/marketing-mcp/mcp_data` | Host directory for `users.sqlite` (bind mount). Unset → named volume `mcp_data` |
-| `DEBUG` | `false` | `true` logs requests/responses to `/app/data/debug.log` |
+| `MCP_BASE_URL` | `https://mcp.example.com` | Public URL. Used for OAuth callbacks |
+| `MCP_DATA_PATH` | `/opt/marketing-mcp/data` | Host directory for `users.sqlite`. If unset, a named volume is used |
+| `DEBUG` | `false` | `true` logs requests to `/app/data/debug.log` |
 
-> Keep `MCP_DATA_PATH` stable across redeploys — that directory holds all users and their saved credentials.
+> ⚠️ Keep `MCP_DATA_PATH` the same across redeploys. That directory holds all users and their credentials.
 
-The image is built locally on the host from the cloned sources (`pull_policy: build` in `docker-compose.yml`) — nothing is pulled from a registry except the official `php:8.5-cli` and `composer:2` images. Google APIs are called over REST, so no PHP extensions need to be compiled from source.
+The image is built on your host from source; only the official `php` and `composer` images are pulled. No port is published. The container joins the external Docker network `proxy` as **`marketing-mcp:8080`**:
 
-No port is published on the host. The container joins the external Docker network `proxy` (create it once with `docker network create proxy` and attach Nginx Proxy Manager to it). In Nginx Proxy Manager: add a Proxy Host → scheme `http`, forward hostname `marketing-mcp`, port `8080` → enable SSL as usual.
+```bash
+docker network create proxy   # once, then attach your reverse proxy to it
+```
 
-### 2 — Create a user
+In Nginx Proxy Manager, add a Proxy Host for your domain → scheme `http`, host `marketing-mcp`, port `8080` → enable SSL. Check it with `curl https://mcp.example.com/health`, which should return `OK`.
+
+### 2. Create a user
 
 ```bash
 docker compose exec mcp php users.php add alice
 ```
 
-Prints a Bearer token. Keep it — this is the credential for Claude.
+This prints a **Bearer token**, which is that user's key to the server.
 
-### 3 — Connect Claude
+### 3. Connect Claude
 
-Add to `~/.claude.json` (global) or `.mcp.json` (project-level):
+**claude.ai / Claude Desktop:** Settings → Connectors → *Add custom connector* → URL `https://mcp.example.com/mcp`. Claude opens a login page; paste the token from step 2.
+
+**Claude Code:** add this to `~/.claude.json` or the project's `.mcp.json`:
 
 ```json
 {
@@ -59,760 +102,79 @@ Add to `~/.claude.json` (global) or `.mcp.json` (project-level):
     "marketing": {
       "type": "http",
       "url": "https://mcp.example.com/mcp",
-      "headers": {
-        "Authorization": "Bearer <token from step 2>"
-      }
+      "headers": { "Authorization": "Bearer <token>" }
     }
   }
 }
 ```
 
-### 4 — Authorize platforms
+### 4. Connect your platforms
 
-Once connected, tell Claude to call `auth_status` — it will report what's missing and guide you through the setup. Or just ask: *"set up Google Ads for me"* and Claude will walk through each step.
+Ask Claude: *"Run auth_status and help me connect what's missing."*
 
-See [Authorizing platforms from Claude](#authorizing-platforms-from-claude) for details.
+| Platform | How | What you need |
+|---|---|---|
+| Google Ads + GA4 + Search Console | OAuth: `auth_start_google` → browser → `auth_finish_google` | Google Cloud OAuth client (*Web application*) and an Ads developer token. Enable the Google Ads, Analytics Data and Search Console APIs |
+| Meta Ads | OAuth: `auth_start_meta` → `auth_finish_meta` | Meta app with Marketing API + Facebook Login. Token lasts ~60 days |
+| TikTok Ads | OAuth: `auth_start_tiktok` → `auth_finish_tiktok` | TikTok for Business app with Marketing API |
+| Microsoft Clarity | `auth_set_clarity` | Settings → Data Export → API token |
+| Rybbit | `auth_set_rybbit` | Instance URL + **organization** API key |
+| Bing Webmaster | `auth_set_bing_webmaster` | Settings → API access → API Key |
+| SerpBear | `auth_set_serpbear` | Instance URL + `APIKEY` from its `.env` |
 
-### 5 — Maintenance
-
-```bash
-docker compose logs -f mcp                  # live logs
-git pull && docker compose up -d --build   # update: pull sources and rebuild the image
-docker compose exec mcp php users.php list  # list all users
-```
+Register `https://<your-domain>/oauth/callback` as the redirect URI in the Google, Meta and TikTok apps. Each `auth_start_*` tool includes a step-by-step setup guide that Claude follows with you.
 
 ---
 
-## Local setup (stdio)
+## Operations
 
-For single-user local use without Docker.
+```bash
+git pull && docker compose up -d --build                 # update
+docker compose logs -f mcp                               # logs
+docker compose exec mcp php users.php list               # users and tokens
+docker compose exec mcp php users.php env:show alice     # stored keys (masked)
+docker compose exec mcp php users.php env:set alice KEY value
+docker compose exec -T mcp php users.php env:import alice < creds.env
+docker compose exec mcp php users.php token:reset alice  # new token if leaked
+docker compose exec mcp php users.php remove alice
+```
+
+Stored keys use the same names as [`.env.example`](.env.example).
+
+After an update that adds tools, reconnect the server in your client (for example `/mcp` in Claude Code) so the new tools appear.
+
+## Local mode (stdio, single user)
+
+No Docker and no HTTP. Credentials live in a local `.env`.
 
 ```bash
 composer install
-php auth.php         # interactive OAuth2 flow — opens browser, writes .env
+php auth.php        # interactive OAuth for Google and Meta → writes .env
 ```
 
-MCP client config:
+For the other platforms, fill in their keys in `.env` by hand (see [`.env.example`](.env.example)). Then point your MCP client at the server:
 
 ```json
 {
   "mcpServers": {
-    "marketing": {
-      "command": "php",
-      "args": ["/path/to/marketing-mcp/app.php"]
-    }
+    "marketing": { "command": "php", "args": ["/path/to/marketing-mcp/app.php"] }
   }
 }
 ```
 
----
-
-## Authorizing platforms from Claude
-
-In HTTP mode, credentials are stored per-user in SQLite. Authorization happens through MCP tools — no terminal access needed.
-
-### How it works
-
-1. Call **`auth_start_google`** or **`auth_start_meta`** — returns an OAuth URL
-2. Open the URL in your browser and authorize access
-3. The browser shows "Authorized! You can close this tab."
-4. Call **`auth_finish_google`** or **`auth_finish_meta`** — saves the credentials
-
-The server's OAuth callback endpoint is `https://yourdomain.com/oauth/callback`. This URL must be registered in both Google and Meta developer consoles (the tool descriptions contain exact instructions for where to add it).
-
-### Auth tools
-
-| Tool | What it does |
-|---|---|
-| `auth_status` | Shows which platforms are configured and what's missing |
-| `auth_start_google` | Starts Google OAuth2. Tool description contains full setup guide for Google Cloud Console |
-| `auth_finish_google` | Completes Google auth, saves refresh token |
-| `auth_start_meta` | Starts Meta OAuth2. Tool description contains full setup guide for the Meta developer portal |
-| `auth_finish_meta` | Completes Meta auth, saves long-lived token (~60 days) |
-| `auth_start_tiktok` / `auth_finish_tiktok` | TikTok Ads OAuth2 flow |
-| `auth_set_clarity` | Saves the Microsoft Clarity API token (single step — Clarity has no OAuth) |
-| `auth_set_rybbit` | Saves self-hosted Rybbit `base_url` + `api_key` (single step — Rybbit has no OAuth) |
-| `auth_set_bing_webmaster` | Saves the Bing Webmaster Tools API key (single step) |
-| `auth_set_serpbear` | Saves self-hosted SerpBear `base_url` + `api_key` (single step) |
-
-> **Token-based integrations** (Microsoft Clarity, Rybbit, Bing Webmaster, SerpBear) don't use OAuth — there's no browser step. Just call the matching `auth_set_*` tool with the token(s) and you're done.
->
-> **Google Search Console** shares the Google OAuth token with Ads and GA4 (scope `webmasters.readonly`). If you authorized Google before Search Console support was added, re-run `auth_start_google` + `auth_finish_google` once.
-
-### Google — what you'll need
-
-Before calling `auth_start_google`:
-
-1. **Google Cloud project** — [console.cloud.google.com](https://console.cloud.google.com)
-2. **APIs enabled** — Google Ads API + Google Analytics Data API + Google Search Console API
-3. **OAuth client** — type: *Web application*, redirect URI: `https://yourdomain.com/oauth/callback`
-4. **Developer token** — [ads.google.com/aw/apicenter](https://ads.google.com/aw/apicenter)
-
-The `auth_start_google` tool description includes step-by-step instructions for all of the above. Claude can read them and guide you interactively.
-
-### Meta — what you'll need
-
-Before calling `auth_start_meta`:
-
-1. **Meta developer app** — [developers.facebook.com](https://developers.facebook.com), type: Business
-2. **Marketing API product** added to the app
-3. **Facebook Login product** added, redirect URI `https://yourdomain.com/oauth/callback` registered
-4. **App ID and App Secret** — Settings → Basic
-
-The `auth_start_meta` tool description includes step-by-step instructions. Meta tokens expire in ~60 days — re-authorize with `auth_start_meta` + `auth_finish_meta` when needed.
+Every platform tool is available in local mode. The `auth_*` tools exist only in HTTP mode.
 
 ---
 
-## User management CLI
+## Project layout
 
-Run inside the Docker container:
-
-```bash
-# Create user — prints Bearer token
-docker compose exec mcp php users.php add <name>
-
-# List all users and tokens
-docker compose exec mcp php users.php list
-
-# Show a user's env vars (values masked)
-docker compose exec mcp php users.php env:show <name>
-
-# Set a single env var manually
-docker compose exec mcp php users.php env:set <name> META_ACCESS_TOKEN EAAxxxxx
-
-# Import all vars from a .env file
-docker compose exec -T mcp php users.php env:import <name> < credentials.env
-
-# Reset a compromised token
-docker compose exec mcp php users.php token:reset <name>
-
-# Remove a user and all their credentials
-docker compose exec mcp php users.php remove <name>
+```text
+server.php              HTTP server (ReactPHP): MCP endpoint, OAuth for connectors and platforms
+app.php                 stdio entry point
+users.php               user management CLI
+src/McpServer.php       JSON-RPC / MCP protocol
+src/Providers/*.php     one provider per platform; each registers its tools
+docs/TOOLS.md           tools reference
 ```
 
-Credentials stored per user (same key names as `.env.example`):
-
-| Platform | Keys |
-|---|---|
-| Google Ads | `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` *(MCC only)* |
-| Google Analytics 4 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` |
-| Meta Ads | `META_APP_ID`, `META_APP_SECRET`, `META_ACCESS_TOKEN` |
-
----
-
-## Tools reference
-
-### Finding account IDs
-
-| Platform | How to find IDs |
-|---|---|
-| Google Ads `customer_id` | 10-digit number, no dashes. Call `google_ads_list_customers` first. |
-| GA4 `property_id` | Numeric ID — Analytics → Admin → Property Settings. E.g. `123456789`. |
-| Meta `account_id` | Numeric ID, with or without `act_` prefix. Call `meta_get_ad_accounts` first. |
-
----
-
-## Google Ads tools
-
-`date_range` values: `TODAY` `YESTERDAY` `LAST_7_DAYS` `LAST_14_DAYS` `LAST_30_DAYS` `THIS_MONTH` `LAST_MONTH` `THIS_QUARTER` `LAST_QUARTER` `THIS_YEAR` `LAST_YEAR`
-
-Monetary values are in **micros** — divide by 1,000,000 for the actual amount.
-
----
-
-### `google_ads_list_customers`
-
-List all accessible Google Ads accounts. Call this first to get `customer_id` values.
-
-**Parameters:** none
-
-**Returns:** `{ customers: [{ customer_id, resource_name }], total }`
-
----
-
-### `google_ads_get_campaigns`
-
-Campaigns with spend, clicks, impressions, CTR, CPC, CPM, conversions, and conversion value.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `date_range` | string | no | `LAST_30_DAYS` |
-| `status` | string | no | `ALL` — `ENABLED` \| `PAUSED` \| `REMOVED` \| `ALL` |
-
----
-
-### `google_ads_get_ad_groups`
-
-Ad groups with bids and metrics. Optionally scoped to one campaign.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `campaign_id` | string | no | — |
-| `date_range` | string | no | `LAST_30_DAYS` |
-
----
-
-### `google_ads_get_keywords`
-
-Keywords with quality score (1–10), match type, effective CPC bid, impression share.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `campaign_id` | string | no | — |
-| `ad_group_id` | string | no | — |
-| `date_range` | string | no | `LAST_30_DAYS` |
-| `limit` | integer | no | `200` |
-
----
-
-### `google_ads_get_search_terms`
-
-What users actually searched to trigger your ads. Use for negative keyword discovery.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `campaign_id` | string | no | — |
-| `date_range` | string | no | `LAST_30_DAYS` |
-| `limit` | integer | no | `200` |
-
----
-
-### `google_ads_get_ads`
-
-Individual ads with creative text (RSA headlines/descriptions, ETA fields) and approval status.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `campaign_id` | string | no | — |
-| `ad_group_id` | string | no | — |
-| `date_range` | string | no | `LAST_30_DAYS` |
-| `limit` | integer | no | `100` |
-
----
-
-### `google_ads_get_geo_performance`
-
-Performance by geographic location (`country_criterion_id`).
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `campaign_id` | string | no | — |
-| `date_range` | string | no | `LAST_30_DAYS` |
-| `limit` | integer | no | `100` |
-
----
-
-### `google_ads_get_account_metrics`
-
-Top-line account summary: total spend, clicks, impressions, conversions, impression share, lost IS (budget and rank).
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `date_range` | string | no | `LAST_30_DAYS` |
-
----
-
-### `google_ads_query`
-
-Execute any [GAQL](https://developers.google.com/google-ads/api/docs/query/overview) query. Use when other tools don't cover the report you need (shopping, video, change history, audiences, etc.).
-
-| Parameter | Type | Required |
-|---|---|---|
-| `customer_id` | string | yes |
-| `query` | string | yes |
-
-```sql
--- Change history
-SELECT change_event.change_date_time, change_event.change_resource_type, change_event.user_email
-FROM change_event WHERE change_event.change_date_time DURING LAST_14_DAYS
-ORDER BY change_event.change_date_time DESC LIMIT 50
-
--- Shopping performance
-SELECT shopping_performance_view.resource_name, metrics.clicks, metrics.cost_micros
-FROM shopping_performance_view WHERE segments.date DURING LAST_30_DAYS
-```
-
----
-
-### `google_ads_get_change_history`
-
-Account change history — who changed what and when (campaigns, ad groups, bids, budgets, ads, criteria). Google retains only the **last 30 days**.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `days` | integer | no | `14` (max 30) |
-| `resource_type` | string | no | — e.g. `CAMPAIGN`, `AD_GROUP`, `AD_GROUP_AD`, `CAMPAIGN_BUDGET` |
-| `limit` | integer | no | `500` (max 10000) |
-
-**Returns:** `{ changes: [...], total, days }`
-
----
-
-### `google_ads_get_negative_keyword_lists`
-
-Shared negative keyword lists (shared sets of type `NEGATIVE_KEYWORDS`): the lists, their keyword members, and which campaigns each is attached to.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-
-**Returns:** `{ lists: [...], members: [...], attachments: [...], total_lists }`
-
----
-
-### `google_ads_get_negative_keywords`
-
-Negative keywords applied directly at the campaign and ad group levels (excludes shared lists).
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `campaign_id` | string | no | — |
-| `limit` | integer | no | `500` |
-
-**Returns:** `{ campaign_level: [...], ad_group_level: [...], total }`
-
----
-
-### `google_ads_get_audiences`
-
-Audience segments / user lists, including custom-uploaded Customer Match lists (`user_list.type = CRM_BASED`) with match rates, plus remarketing, similar, rule-based lists and combined audiences. Shows sizes, membership status, and eligibility.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `list_type` | string | no | — e.g. `CRM_BASED`, `REMARKETING`, `SIMILAR`, `RULE_BASED`, `LOGICAL` |
-
-**Returns:** `{ user_lists: [...], audiences: [...], total_user_lists }`
-
----
-
-### `google_ads_get_audience_performance`
-
-Performance of audience segments attached to campaigns and ad groups (`campaign_audience_view`, `ad_group_audience_view`) with impressions, clicks, cost, and conversions per audience.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `customer_id` | string | yes | — |
-| `campaign_id` | string | no | — |
-| `date_range` | string | no | `LAST_30_DAYS` |
-| `limit` | integer | no | `200` |
-
-**Returns:** `{ ad_group_level: [...], campaign_level: [...], total, date_range }`
-
----
-
-## Google Analytics 4 tools
-
-`start_date` / `end_date`: relative (`today`, `yesterday`, `7daysAgo`, `30daysAgo`) or absolute `YYYY-MM-DD`.
-
----
-
-### `ga4_run_report`
-
-Custom report with any dimensions and metrics from the [GA4 explorer](https://ga-dev-tools.google/dimensions-metrics-explorer/).
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `property_id` | string | yes | — |
-| `dimensions` | string[] | yes | — |
-| `metrics` | string[] | yes | — |
-| `start_date` | string | no | `30daysAgo` |
-| `end_date` | string | no | `today` |
-| `limit` | integer | no | `100` |
-
----
-
-### `ga4_run_realtime_report`
-
-Active users right now with optional dimension breakdown.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `property_id` | string | yes | — |
-| `dimensions` | string[] | no | `["country"]` |
-| `metrics` | string[] | no | `["activeUsers"]` |
-
----
-
-### `ga4_get_audience_overview`
-
-Daily breakdown: `totalUsers`, `newUsers`, `sessions`, `bounceRate`, `averageSessionDuration`, `engagedSessions`, `engagementRate` split by `newVsReturning`.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `property_id` | string | yes | — |
-| `start_date` | string | no | `30daysAgo` |
-| `end_date` | string | no | `today` |
-
----
-
-### `ga4_get_traffic_sources`
-
-Sessions by channel group, source, and medium. Includes `sessions`, `totalUsers`, `bounceRate`, `conversions`, `totalRevenue`.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `property_id` | string | yes | — |
-| `start_date` | string | no | `30daysAgo` |
-| `end_date` | string | no | `today` |
-| `limit` | integer | no | `50` |
-
----
-
-### `ga4_get_top_pages`
-
-Top pages by views. Returns `pagePath`, `pageTitle`, `totalUsers`, `bounceRate`, `engagementRate`, `conversions`.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `property_id` | string | yes | — |
-| `start_date` | string | no | `30daysAgo` |
-| `end_date` | string | no | `today` |
-| `limit` | integer | no | `50` |
-
----
-
-### `ga4_get_conversions`
-
-Conversion events by `eventName` and channel group. Returns `conversions`, `totalRevenue`, `sessions`.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `property_id` | string | yes | — |
-| `start_date` | string | no | `30daysAgo` |
-| `end_date` | string | no | `today` |
-
----
-
-### `ga4_get_ecommerce`
-
-Revenue, transactions, items sold, average order value. Returns empty if the property has no e-commerce events.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `property_id` | string | yes | — |
-| `start_date` | string | no | `30daysAgo` |
-| `end_date` | string | no | `today` |
-| `limit` | integer | no | `50` |
-
----
-
-### `ga4_get_geo_breakdown`
-
-Traffic by country and city.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `property_id` | string | yes | — |
-| `start_date` | string | no | `30daysAgo` |
-| `end_date` | string | no | `today` |
-| `limit` | integer | no | `50` |
-
----
-
-### `ga4_get_device_breakdown`
-
-Traffic by device category, OS, and browser.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `property_id` | string | yes | — |
-| `start_date` | string | no | `30daysAgo` |
-| `end_date` | string | no | `today` |
-
----
-
-## Meta Ads tools
-
-`account_id` accepts numeric ID with or without `act_` prefix.
-
-`date_preset`: `today` `yesterday` `last_3d` `last_7d` `last_14d` `last_28d` `last_30d` `last_90d` `this_month` `last_month` `this_quarter` `last_year` `lifetime`
-
-Monetary values are in account currency (not micros).
-
----
-
-### `meta_get_ad_accounts`
-
-List all accessible ad accounts. Call this first to get `account_id` values.
-
-**Parameters:** none
-
-`account_status` codes: `1`=Active, `2`=Disabled, `3`=Unsettled, `7`=Pending review, `101`=Closed.
-
----
-
-### `meta_get_campaigns`
-
-Campaigns with budget, objective, and insights (spend, reach, impressions, clicks, CTR, CPC, ROAS, `actions`).
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `account_id` | string | yes | — |
-| `date_preset` | string | no | `last_30d` |
-| `status` | string[] | no | `["ACTIVE","PAUSED"]` |
-| `limit` | integer | no | `50` |
-
-`actions` in insights is `[{ action_type, value }]`. Common types: `link_click`, `lead`, `purchase`, `add_to_cart`, `initiate_checkout`, `complete_registration`.
-
----
-
-### `meta_get_adsets`
-
-Ad sets with targeting (`age_min/max`, `genders`, `geo_locations`, `interests`, `custom_audiences`, `publisher_platforms`) and insights.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `account_id` | string | yes | — |
-| `campaign_id` | string | no | — |
-| `date_preset` | string | no | `last_30d` |
-| `limit` | integer | no | `50` |
-
----
-
-### `meta_get_ads`
-
-Individual ads with creative reference and insights. Use `creative.id` from results with `meta_get_creatives` to get image/copy.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `account_id` | string | yes | — |
-| `campaign_id` | string | no | — |
-| `adset_id` | string | no | — |
-| `date_preset` | string | no | `last_30d` |
-| `limit` | integer | no | `50` |
-
----
-
-### `meta_get_insights`
-
-Aggregated insights with optional breakdowns. More flexible than the per-object insights on campaigns/adsets/ads.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `account_id` | string | yes | — |
-| `object_id` | string | no | — |
-| `object_type` | string | no | `account` — `account` \| `campaign` \| `adset` \| `ad` |
-| `date_preset` | string | no | `last_30d` |
-| `breakdowns` | string[] | no | none |
-| `limit` | integer | no | `100` |
-
-`breakdowns`: `age` `gender` `country` `region` `impression_device` `placement` `platform_position` `publisher_platform`
-
-Note: some breakdown combinations are incompatible. Use one at a time when unsure.
-
----
-
-### `meta_get_custom_audiences`
-
-Custom and lookalike audiences with size estimates and data source.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `account_id` | string | yes | — |
-| `limit` | integer | no | `50` |
-
-`subtype` values: `CUSTOM` `WEBSITE` `APP` `LOOKALIKE` `ENGAGEMENT` `VIDEO` `OFFLINE_CONVERSION`
-
----
-
-### `meta_get_pixels`
-
-Meta Pixels with last fire time.
-
-| Parameter | Type | Required |
-|---|---|---|
-| `account_id` | string | yes |
-
----
-
-### `meta_get_creatives`
-
-Ad creative assets: title, body, image URL, CTA type, destination URL.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `account_id` | string | yes | — |
-| `limit` | integer | no | `50` |
-
----
-
-## Microsoft Clarity tools
-
-Behavioral analytics that complement GA4 — Clarity surfaces UX friction (rage clicks, dead clicks, quickbacks, scroll depth, JS errors) that GA4 doesn't capture. Auth is a static project token (`CLARITY_API_TOKEN`), generated in Clarity → **Settings → Data Export → Generate new API token**. No OAuth flow.
-
-> **Constraints (Clarity API):** data covers only the **last 1–3 days**, max **10 requests per project per day**, response capped at **1000 rows** (no pagination), results in UTC.
-
-### `clarity_get_insights`
-
-Live insights for the project: traffic, scroll depth, engagement time, dead/rage/quickback clicks, excessive scroll, and script errors. Optionally broken down by up to three dimensions.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `num_of_days` | integer | no | `1` — `1` \| `2` \| `3` |
-| `dimension1` | string | no | — `Browser` \| `Device` \| `Country/Region` \| `OS` \| `Source` \| `Medium` \| `Campaign` \| `Channel` \| `URL` |
-| `dimension2` | string | no | — second breakdown |
-| `dimension3` | string | no | — third breakdown |
-
-**Returns:** `{ num_of_days, metrics: [{ metricName, information: [...] }] }`
-
----
-
-## Rybbit tools
-
-Analytics from a [Rybbit](https://rybbit.com) instance (self-hosted or cloud). Set `RYBBIT_BASE_URL` (no trailing slash) and `RYBBIT_API_KEY`. Prefer an **Organization API key** — it covers every site in the org. Scoped keys need the matching `resource:read` scopes (`analytics`, `sessions`, `events`, `users`, `goals`, `funnels`, `replay`, `sql`, `org`); a missing scope or wrong `site_id` returns **403**.
-
-Start with `rybbit_list_sites` to get `site_id` / `organization_id`. Most tools accept the common params: `start_date` + `end_date` (`YYYY-MM-DD`), `time_zone`, or `past_minutes_start` + `past_minutes_end`, plus `filters` (JSON array of `{parameter, type, value[]}`) and `segment_id`.
-
-| Area | Tools |
-|---|---|
-| Sites | `rybbit_list_sites` |
-| Overview | `rybbit_get_overview`, `rybbit_get_overview_timeseries`, `rybbit_get_live_visitors` |
-| Breakdowns | `rybbit_get_metric` (by channel, referrer, UTM, country, device, entry/exit page…), `rybbit_get_pages`, `rybbit_get_page_trends`, `rybbit_get_session_locations` |
-| Sessions | `rybbit_get_sessions` (`view`: replay / errors / converted / bounced), `rybbit_get_session` (event timeline) |
-| Session replay | `rybbit_list_session_replays`, `rybbit_get_session_replay` |
-| Users | `rybbit_get_users`, `rybbit_get_user` (first-touch acquisition, devices, vitals), `rybbit_get_user_trait_keys` |
-| Events | `rybbit_get_events`, `rybbit_get_event_names`, `rybbit_get_event_properties`, `rybbit_get_event_timeseries`, `rybbit_get_event_counts`, `rybbit_get_outbound_links` |
-| Goals & funnels | `rybbit_get_goals`, `rybbit_get_goal_timeseries`, `rybbit_get_goal_sessions`, `rybbit_get_funnels`, `rybbit_analyze_funnel`, `rybbit_get_funnel_step_sessions` |
-| Behaviour | `rybbit_get_journeys`, `rybbit_get_retention` |
-| Performance & errors | `rybbit_get_performance`, `rybbit_get_performance_by_dimension`, `rybbit_get_errors`, `rybbit_get_error_events` |
-| Bots & AI crawlers | `rybbit_get_bots_overview`, `rybbit_get_bots_by_dimension` (`purpose`: `ai_crawler`, `ai_search`, `ai_agent`…) |
-| Segments & annotations | `rybbit_get_segments`, `rybbit_get_annotations`, `rybbit_create_annotation` (**write**) |
-| Custom SQL | `rybbit_run_sql` — read-only ClickHouse over `scoped_events`, max 1000 rows (needs `sql:read`) |
-
-### Session replay analysis
-
-`rybbit_get_session_replay` does not dump raw rrweb data (thousands of DOM/mouse events). It decodes the recording into a compact timeline:
-
-- page navigations and max scroll depth per page;
-- clicks/taps resolved to the clicked element (`tag`, visible text, `href`, `id`/`class`), climbing to the nearest button/link;
-- **rage clicks** (≥3 clicks within 1 s inside 40 px);
-- form fields the visitor interacted with — **values are never returned**;
-- viewport resizes and console errors.
-
-Pass `include_raw: true` to also get the first `raw_limit` raw events.
-
-**Workflow — "why do people drop off at checkout?"**
-1. `rybbit_analyze_funnel` with steps `/product/**` → `/cart` → `/checkout`
-2. `rybbit_get_funnel_step_sessions` with `mode: dropped`, `replays_only: true`
-3. `rybbit_get_session_replay` for a few of those sessions
-
----
-
-## Google Search Console tools
-
-Organic Google search data. Uses the same Google OAuth token as Ads/GA4 (scope `https://www.googleapis.com/auth/webmasters.readonly`). `site_url` is the property exactly as returned by `gsc_list_sites`: `https://example.com/` (URL-prefix) or `sc-domain:example.com` (domain property).
-
-### `gsc_list_sites`
-
-Properties available to the account, with permission level.
-
-### `gsc_search_analytics`
-
-Clicks, impressions, CTR (percent) and average position.
-
-| Parameter | Type | Required | Default |
-|---|---|---|---|
-| `site_url` | string | yes | — |
-| `start_date` / `end_date` | string | yes | — `YYYY-MM-DD` |
-| `dimensions` | array | no | `["query"]` — `query` \| `page` \| `country` \| `device` \| `date` \| `searchAppearance` |
-| `search_type` | string | no | `web` — `image` \| `video` \| `news` \| `discover` \| `googleNews` |
-| `filters` | array | no | — `[{dimension, operator, expression}]`, AND-combined |
-| `row_limit` | integer | no | `1000` (max 25000) |
-| `start_row` | integer | no | `0` |
-| `data_state` | string | no | `final` — `all` includes fresh data |
-
-### `gsc_list_sitemaps`
-
-Submitted sitemaps with last submitted/downloaded dates, warnings, errors and indexed counts.
-
-### `gsc_inspect_url`
-
-URL Inspection API: index status, coverage, last crawl, Google canonical, mobile usability, rich results. Params: `site_url`, `inspection_url`, `language_code` (default `en-US`). Quota ~2000/day per property.
-
----
-
-## Bing Webmaster tools
-
-Bing organic search data (also covers Yahoo/DuckDuckGo syndication). Auth is a static API key (`BING_WEBMASTER_API_KEY`) from Bing Webmaster Tools → **Settings → API access → API Key**. Bing returns full history; the stats tools filter client-side by optional `start_date` / `end_date` and sort by impressions with a `limit` (default 100, `0` = all). `site_url` is as listed by `bing_list_sites`.
-
-| Tool | What it returns |
-|---|---|
-| `bing_list_sites` | Verified sites |
-| `bing_get_traffic_stats` | Daily impressions and clicks |
-| `bing_get_query_stats` | Top queries: impressions, clicks, avg click/impression position (weekly rows) |
-| `bing_get_page_stats` | Top pages with the same metrics |
-| `bing_get_query_page_stats` | Pages ranking for one `query` |
-| `bing_get_page_query_stats` | Queries driving traffic to one `page` |
-| `bing_get_crawl_stats` | Daily crawl: crawled pages, errors, in-index, blocked by robots.txt, HTTP codes |
-| `bing_get_crawl_issues` | URLs with crawl issues |
-| `bing_get_link_counts` | Inbound link counts per page (`page` index, from 0) |
-| `bing_get_url_info` | Index details for one `url` |
-| `bing_get_sitemaps` | Submitted sitemaps/feeds and their status |
-| `bing_get_keyword_stats` | Keyword research: weekly Bing impressions for `query` in `country` / `language` |
-| `bing_get_url_submission_quota` | Remaining daily/monthly URL submission quota |
-
----
-
-## SerpBear tools
-
-Keyword rank tracking from a **self-hosted** [SerpBear](https://docs.serpbear.com) instance. Set `SERPBEAR_BASE_URL` (no trailing slash) and `SERPBEAR_API_KEY` (the `APIKEY` value from SerpBear's `.env`). Keyword responses drop the heavy raw SERP snapshot (`lastResult`) and trim `history` to the last 30 days by default — override with `include_serp_result: true` / `history_days: 0`.
-
-| Tool | What it does |
-|---|---|
-| `serpbear_get_domains` | Tracked domains with keyword counts and last update |
-| `serpbear_get_keywords` | All keywords for a `domain`: position, ranking URL, device, country, tags, history. Optional `tag`, `device` filters |
-| `serpbear_get_keyword` | One keyword by `id` |
-| `serpbear_refresh_keywords` | Re-scrape positions now for keyword `ids` (uses scraper credits) |
-
----
-
-## Common workflows
-
-**"What's my Google Ads performance this month?"**
-1. `google_ads_list_customers` → get `customer_id`
-2. `google_ads_get_account_metrics` with `date_range: THIS_MONTH`
-3. `google_ads_get_campaigns` for breakdown by campaign
-
-**"Which Meta campaigns have the best ROAS?"**
-1. `meta_get_ad_accounts` → get `account_id`
-2. `meta_get_campaigns` → look at `insights.action_values[purchase] / insights.spend`
-
-**"Where is my website traffic coming from?"**
-1. `ga4_get_traffic_sources` with your `property_id`
-
-**"What search terms are wasting budget?"**
-1. `google_ads_get_search_terms` → find terms with high spend and 0 conversions
-
-**"Full cross-platform audit"**
-1. `google_ads_get_account_metrics` — top-line spend/conversions
-2. `google_ads_get_campaigns` + `google_ads_get_keywords` — quality scores, impression share
-3. `google_ads_get_search_terms` — irrelevant queries
-4. `meta_get_campaigns` + `meta_get_insights` with `breakdowns: ["age"]` and `["placement"]`
-5. `ga4_get_traffic_sources` — paid vs organic split
-6. `ga4_get_conversions` — which events actually convert
-
----
-
-## Error reference
-
-All tools return errors inside the MCP `content` array (with `isError: true`). Common causes:
-
-| Error | Cause | Fix |
-|---|---|---|
-| `PERMISSION_DENIED` | OAuth token can't access that account | Check account access in Google Ads or use `google_ads_list_customers` to see what's accessible |
-| `INVALID_CUSTOMER_ID` | Wrong format or account doesn't exist | Use 10-digit format without dashes |
-| `quota exceeded` | Google Ads API daily quota hit | Wait 24 hours or request a higher quota |
-| `(#100)` | Meta: invalid parameter or missing permission | Check scope — ensure `ads_read`, `ads_management`, `business_management` were granted |
-| `OAuth2 token expired` | Google refresh token revoked or expired | Call `auth_start_google` + `auth_finish_google` |
-| `Error validating access token` | Meta token expired (~60 days) | Call `auth_start_meta` + `auth_finish_meta` |
-| `Developer token is not approved` | Google Ads dev token has Basic Access | Apply for Standard Access at ads.google.com/aw/apicenter |
+To add a platform, write a provider with `registerTools(McpServer $server)`, then register it in `server.php` and `app.php`.

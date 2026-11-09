@@ -12,6 +12,12 @@ require_once __DIR__ . '/src/McpServer.php';
 require_once __DIR__ . '/src/Providers/GoogleAdsProvider.php';
 require_once __DIR__ . '/src/Providers/GoogleAnalyticsProvider.php';
 require_once __DIR__ . '/src/Providers/MetaAdsProvider.php';
+require_once __DIR__ . '/src/Providers/TikTokAdsProvider.php';
+require_once __DIR__ . '/src/Providers/ClarityProvider.php';
+require_once __DIR__ . '/src/Providers/RybbitProvider.php';
+require_once __DIR__ . '/src/Providers/SearchConsoleProvider.php';
+require_once __DIR__ . '/src/Providers/BingWebmasterProvider.php';
+require_once __DIR__ . '/src/Providers/SerpBearProvider.php';
 
 // Suppress PHP warnings/deprecations from vendor libs — they would corrupt the stdout MCP channel
 set_error_handler(function (int $errno, string $errstr): bool {
@@ -28,5 +34,11 @@ $server = new McpServer();
 (new GoogleAdsProvider())->registerTools($server);
 (new GoogleAnalyticsProvider())->registerTools($server);
 (new MetaAdsProvider())->registerTools($server);
+(new TikTokAdsProvider())->registerTools($server);
+(new ClarityProvider())->registerTools($server);
+(new RybbitProvider())->registerTools($server);
+(new SearchConsoleProvider())->registerTools($server);
+(new BingWebmasterProvider())->registerTools($server);
+(new SerpBearProvider())->registerTools($server);
 
 $server->run();

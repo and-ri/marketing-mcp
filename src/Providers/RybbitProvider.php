@@ -697,7 +697,13 @@ class RybbitProvider
         if (!empty($args['min_duration'])) {
             $q['minDuration'] = (int) $args['min_duration'];
         }
-        return $this->get('/api/sites/' . self::site($args) . '/session-replay/list', $q);
+        $data = $this->get('/api/sites/' . self::site($args) . '/session-replay/list', $q);
+        foreach ($data['data'] ?? [] as $i => $row) {
+            if (!empty($row['page_url'])) {
+                $data['data'][$i]['page_url'] = RrwebAnalyzer::cleanUrl((string) $row['page_url']);
+            }
+        }
+        return $data;
     }
 
     public function getSessionReplay(array $args): array
@@ -707,6 +713,9 @@ class RybbitProvider
 
         $events = $data['events'] ?? $data['data']['events'] ?? [];
         $meta   = $data['metadata'] ?? $data['data']['metadata'] ?? null;
+        if (is_array($meta) && !empty($meta['page_url'])) {
+            $meta['page_url'] = RrwebAnalyzer::cleanUrl((string) $meta['page_url']);
+        }
 
         $result = [
             'metadata' => $meta,
@@ -1009,7 +1018,7 @@ class RrwebAnalyzer
             $d    = $e['data'] ?? [];
 
             if ($type === self::META) {
-                $href = $d['href'] ?? null;
+                $href = isset($d['href']) ? self::cleanUrl((string) $d['href']) : null;
                 $viewport = isset($d['width']) ? ($d['width'] . 'x' . ($d['height'] ?? '?')) : $viewport;
                 if ($href && $href !== $curPage) {
                     $curPage = $href;
@@ -1100,19 +1109,15 @@ class RrwebAnalyzer
 
                 case self::SRC_INPUT:
                     $id = (int) ($d['id'] ?? -1);
-                    // Collapse consecutive keystrokes into one entry per field
-                    $last = end($inputs);
-                    if ($last && $last['_id'] === $id && ($e['timestamp'] - $last['_ts']) < 5000) {
-                        $inputs[key($inputs)]['_ts'] = (int) $e['timestamp'];
+                    if ($id < 0 || strtolower($this->nodes[$id]['attrs']['type'] ?? '') === 'hidden') {
                         break;
                     }
+                    // Raw input events are filtered/merged after the loop (see filterInputs)
                     $entry = ['at_s' => $at($e), 'event' => 'input', 'field' => $this->describe($id), '_id' => $id, '_ts' => (int) $e['timestamp']];
                     if (array_key_exists('isChecked', $d)) {
                         $entry['checked'] = (bool) $d['isChecked'];
                     }
                     $inputs[] = $entry;
-                    unset($entry['_id'], $entry['_ts']);
-                    $timeline[] = $entry;
                     break;
 
                 case self::SRC_LOG:
@@ -1124,6 +1129,13 @@ class RrwebAnalyzer
         }
 
         $rage = self::rageClicks($clicks, $t0);
+
+        [$inputs, $ignoredInputs] = self::filterInputs($inputs);
+        foreach ($inputs as $in) {
+            unset($in['_id'], $in['_ts']);
+            $timeline[] = $in;
+        }
+        usort($timeline, fn($a, $b) => $a['at_s'] <=> $b['at_s']);
 
         $truncated = count($timeline) > $maxTimeline;
         if ($truncated) {
@@ -1145,11 +1157,67 @@ class RrwebAnalyzer
                 fn($j) => json_decode($j, true) ?? $j,
                 array_unique(array_map(fn($i) => json_encode($i['field'], JSON_UNESCAPED_UNICODE), $inputs))
             )),
-            'activity_counts'  => $counts,
+            'activity_counts'  => $counts + ['programmatic_inputs_ignored' => $ignoredInputs],
             'timeline'         => $timeline,
             'timeline_truncated' => $truncated,
             'note'             => 'Input values are intentionally not returned. at_s = seconds from replay start.',
         ];
+    }
+
+    /**
+     * Drops script-generated input events (e.g. Meta Pixel fills ~60 hidden fields at once):
+     * any 200 ms window touching more than 2 distinct fields is treated as programmatic.
+     * Remaining keystrokes on the same field within 5 s are merged into one entry.
+     * @return array{0: array, 1: int} [kept inputs, ignored count]
+     */
+    private static function filterInputs(array $inputs): array
+    {
+        $n = count($inputs);
+        $drop = array_fill(0, $n, false);
+        for ($i = 0; $i < $n; $i++) {
+            $fields = [];
+            for ($j = $i; $j < $n && $inputs[$j]['_ts'] - $inputs[$i]['_ts'] <= 200; $j++) {
+                $fields[$inputs[$j]['_id']] = true;
+            }
+            if (count($fields) > 2) {
+                for ($k = $i; $k < $j; $k++) {
+                    $drop[$k] = true;
+                }
+            }
+        }
+
+        $kept = [];
+        $ignored = 0;
+        foreach ($inputs as $i => $in) {
+            if ($drop[$i]) {
+                $ignored++;
+                continue;
+            }
+            $lastKey = array_key_last($kept);
+            if ($lastKey !== null && $kept[$lastKey]['_id'] === $in['_id'] && $in['_ts'] - $kept[$lastKey]['_ts'] < 5000) {
+                $kept[$lastKey]['_ts'] = $in['_ts'];
+                continue;
+            }
+            $kept[] = $in;
+        }
+        return [$kept, $ignored];
+    }
+
+    /** Removes click IDs, Google Ads ValueTrack noise and empty params; keeps utm_* and meaningful params. */
+    public static function cleanUrl(string $url): string
+    {
+        $parts = parse_url($url);
+        if (!$parts || empty($parts['query'])) {
+            return $url;
+        }
+        parse_str($parts['query'], $q);
+        $noise = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'msclkid', 'ttclid', 'yclid', 'srsltid', 'gad_source', 'gad_campaignid',
+                  '_gl', 'mc_eid', 'loc_interest_ms', 'loc_physical_ms', 'feeditemid', 'targetid', 'devicemodel', 'ifmobile',
+                  'ifnotmobile', 'ifsearch', 'ifcontent:', 'network', 'device', 'creative', 'placement', 'target', 'matchtype', 'adgroup'];
+        $q = array_filter($q, fn($v, $k) => $v !== '' && $v !== null && !in_array(strtolower((string) $k), $noise, true)
+            && !str_starts_with((string) $k, 'ifcontent'), ARRAY_FILTER_USE_BOTH);
+        $base = ($parts['scheme'] ?? 'https') . '://' . ($parts['host'] ?? '') . ($parts['path'] ?? '/');
+        return $q ? $base . '?' . http_build_query($q) : $base;
     }
 
     /** ≥3 clicks within 1 s inside a 40px radius. */

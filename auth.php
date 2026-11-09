@@ -153,6 +153,7 @@ if (in_array($choice, ['1', '3'])) {
     $scopes = implode(' ', [
         'https://www.googleapis.com/auth/adwords',
         'https://www.googleapis.com/auth/analytics.readonly',
+        'https://www.googleapis.com/auth/webmasters.readonly',
     ]);
 
     [$oauth2, $socket, $wait] = startOAuthServer(
