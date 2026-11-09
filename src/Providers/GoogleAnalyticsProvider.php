@@ -35,7 +35,11 @@ class GoogleAnalyticsProvider
             ]
         );
 
-        $this->client = new BetaAnalyticsDataClient(['credentials' => $credentials]);
+        // REST transport: no ext-grpc needed
+        $this->client = new BetaAnalyticsDataClient([
+            'credentials' => $credentials,
+            'transport'   => 'rest',
+        ]);
         return $this->client;
     }
 

@@ -27,7 +27,7 @@ cd marketing-mcp
 docker compose up -d --build
 ```
 
-The image is built locally on the host from the cloned sources (`pull_policy: build` in `docker-compose.yml`) — nothing is pulled from a registry except the official `php:8.5-cli` and `composer:2` images. The first build compiles the gRPC extension and takes several minutes; later builds reuse the Docker layer cache.
+The image is built locally on the host from the cloned sources (`pull_policy: build` in `docker-compose.yml`) — nothing is pulled from a registry except the official `php:8.5-cli` and `composer:2` images. Google APIs are called over REST, so no PHP extensions need to be compiled from source.
 
 The server listens on port **8080**. In Nginx Proxy Manager: add a Proxy Host → forward to `localhost:8080` → enable SSL as usual.
 

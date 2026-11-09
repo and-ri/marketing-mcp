@@ -27,7 +27,9 @@ class GoogleAdsProvider
             ->withRefreshToken($this->config['GOOGLE_ADS_REFRESH_TOKEN'])
             ->build();
 
+        // REST transport: no ext-grpc needed (searchStream is supported over REST too)
         $builder = (new GoogleAdsClientBuilder())
+            ->withTransport('rest')
             ->withDeveloperToken($this->config['GOOGLE_ADS_DEVELOPER_TOKEN'])
             ->withOAuth2Credential($oAuth2Credential);
 

@@ -1,16 +1,9 @@
 FROM php:8.5-cli
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        unzip \
-        libsqlite3-dev \
-        libssl-dev \
-        zlib1g-dev \
+# unzip lets composer extract package archives (pdo_sqlite and curl ship with the official image).
+# Google clients use the REST transport, so the slow-to-compile grpc extension is not needed.
+RUN apt-get update && apt-get install -y --no-install-recommends unzip \
     && rm -rf /var/lib/apt/lists/*
-
-RUN docker-php-ext-install pdo pdo_sqlite
-
-# gRPC is compiled from source — slow on the first build, then cached by Docker
-RUN pecl install grpc && docker-php-ext-enable grpc
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
